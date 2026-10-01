@@ -5,15 +5,28 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
-func cmdInit(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("init", flag.ExitOnError)
+func newInitCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Record your Cloudflare credentials in ~/.cfdo/settings.json",
+		Long: `Records your Cloudflare credentials in ~/.cfdo/settings.json (mode 0600) so the
+commands work without exporting environment variables every session.
+
+Environment variables always win over this file:
+  CLOUDFLARE_API_TOKEN   > cloudflare_api_token
+  CLOUDFLARE_ACCOUNT_ID  > account_id in cfdo.json > cloudflare_account_id
+  CFDO_SECRET            > scripts.<name>.cfdo_secret > cfdo_secret`,
+		Args: cobra.NoArgs,
+	}
+	fs := cmd.Flags()
 	token := fs.String("token", "", "Cloudflare API token (prompted for if omitted)")
 	account := fs.String("account", "", "Cloudflare account id (prompted for if omitted)")
 	secret := fs.String("secret", "", "admin secret for the worker's /__cfdo/ routes")
@@ -22,115 +35,101 @@ func cmdInit(ctx context.Context, args []string) error {
 	show := fs.Bool("show", false, "print the current settings and where each value resolves from")
 	noVerify := fs.Bool("no-verify", false, "skip checking the token against the Cloudflare API")
 	force := fs.Bool("force", false, "overwrite values that are already recorded")
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: cfdo init [flags]
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 
-Records your Cloudflare credentials in ~/.cfdo/settings.json (mode 0600) so the
-commands work without exporting environment variables every session.
+		settings, err := loadSettings()
+		if err != nil {
+			return err
+		}
 
-Environment variables always win over this file:
-  CLOUDFLARE_API_TOKEN   > cloudflare_api_token
-  CLOUDFLARE_ACCOUNT_ID  > account_id in cfdo.json > cloudflare_account_id
-  CFDO_SECRET            > scripts.<name>.cfdo_secret > cfdo_secret
+		if *show {
+			return showSettings(settings, *script)
+		}
 
-Flags:
-`)
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(permute(fs, args)); err != nil {
-		return err
-	}
+		in := bufio.NewReader(os.Stdin)
+		interactive := isTerminal(os.Stdin)
 
-	settings, err := loadSettings()
-	if err != nil {
-		return err
-	}
+		// --- token
+		newToken := strings.TrimSpace(*token)
+		if newToken == "" && (settings.APIToken == "" || *force) {
+			if !interactive {
+				return fmt.Errorf("no --token given and stdin is not a terminal")
+			}
+			newToken, err = promptSecret(in, "Cloudflare API token (Workers Scripts:Edit, Account Settings:Read): ")
+			if err != nil {
+				return err
+			}
+		}
+		if newToken != "" {
+			settings.APIToken = newToken
+		}
+		if settings.APIToken == "" {
+			return fmt.Errorf("an API token is required")
+		}
 
-	if *show {
+		// --- account
+		newAccount := strings.TrimSpace(*account)
+		if newAccount == "" && (settings.AccountID == "" || *force) {
+			if !interactive {
+				return fmt.Errorf("no --account given and stdin is not a terminal")
+			}
+			newAccount, err = prompt(in, "Cloudflare account id: ")
+			if err != nil {
+				return err
+			}
+		}
+		if newAccount != "" {
+			settings.AccountID = newAccount
+		}
+		if settings.AccountID == "" {
+			return fmt.Errorf("an account id is required")
+		}
+
+		// --- admin secret
+		newSecret := strings.TrimSpace(*secret)
+		if newSecret == "" && *genSecret {
+			buf := make([]byte, 32)
+			if _, err := rand.Read(buf); err != nil {
+				return err
+			}
+			newSecret = base64.RawURLEncoding.EncodeToString(buf)
+			fmt.Printf("Generated admin secret: %s\n", newSecret)
+		}
+		existingSecret := settings.Secret
+		if *script != "" {
+			existingSecret = settings.Scripts[*script].Secret
+		}
+		if newSecret == "" && (existingSecret == "" || *force) && interactive {
+			newSecret, err = promptSecret(in, "Admin secret (blank to skip, it must match what `cfdo upload` binds): ")
+			if err != nil {
+				return err
+			}
+		}
+		if newSecret != "" {
+			if *script != "" {
+				settings.setScriptSecret(*script, newSecret)
+			} else {
+				settings.Secret = newSecret
+			}
+		}
+
+		if !*noVerify {
+			fmt.Print("Verifying token… ")
+			if err := verifyToken(ctx, settings.APIToken, settings.AccountID); err != nil {
+				fmt.Println("failed")
+				return fmt.Errorf("%w\n  Nothing was written. Re-run with --no-verify to save anyway.", err)
+			}
+			fmt.Println("ok")
+		}
+
+		if err := settings.save(); err != nil {
+			return err
+		}
+		fmt.Printf("Wrote %s (mode 0600)\n", settings.path)
 		return showSettings(settings, *script)
 	}
-
-	in := bufio.NewReader(os.Stdin)
-	interactive := isTerminal(os.Stdin)
-
-	// --- token
-	newToken := strings.TrimSpace(*token)
-	if newToken == "" && (settings.APIToken == "" || *force) {
-		if !interactive {
-			return fmt.Errorf("no -token given and stdin is not a terminal")
-		}
-		newToken, err = promptSecret(in, "Cloudflare API token (Workers Scripts:Edit, Account Settings:Read): ")
-		if err != nil {
-			return err
-		}
-	}
-	if newToken != "" {
-		settings.APIToken = newToken
-	}
-	if settings.APIToken == "" {
-		return fmt.Errorf("an API token is required")
-	}
-
-	// --- account
-	newAccount := strings.TrimSpace(*account)
-	if newAccount == "" && (settings.AccountID == "" || *force) {
-		if !interactive {
-			return fmt.Errorf("no -account given and stdin is not a terminal")
-		}
-		newAccount, err = prompt(in, "Cloudflare account id: ")
-		if err != nil {
-			return err
-		}
-	}
-	if newAccount != "" {
-		settings.AccountID = newAccount
-	}
-	if settings.AccountID == "" {
-		return fmt.Errorf("an account id is required")
-	}
-
-	// --- admin secret
-	newSecret := strings.TrimSpace(*secret)
-	if newSecret == "" && *genSecret {
-		buf := make([]byte, 32)
-		if _, err := rand.Read(buf); err != nil {
-			return err
-		}
-		newSecret = base64.RawURLEncoding.EncodeToString(buf)
-		fmt.Printf("Generated admin secret: %s\n", newSecret)
-	}
-	existingSecret := settings.Secret
-	if *script != "" {
-		existingSecret = settings.Scripts[*script].Secret
-	}
-	if newSecret == "" && (existingSecret == "" || *force) && interactive {
-		newSecret, err = promptSecret(in, "Admin secret (blank to skip, it must match what `cfdo upload` binds): ")
-		if err != nil {
-			return err
-		}
-	}
-	if newSecret != "" {
-		if *script != "" {
-			settings.setScriptSecret(*script, newSecret)
-		} else {
-			settings.Secret = newSecret
-		}
-	}
-
-	if !*noVerify {
-		fmt.Print("Verifying token… ")
-		if err := verifyToken(ctx, settings.APIToken, settings.AccountID); err != nil {
-			fmt.Println("failed")
-			return fmt.Errorf("%w\n  Nothing was written. Re-run with -no-verify to save anyway.", err)
-		}
-		fmt.Println("ok")
-	}
-
-	if err := settings.save(); err != nil {
-		return err
-	}
-	fmt.Printf("Wrote %s (mode 0600)\n", settings.path)
-	return showSettings(settings, *script)
+	return cmd
 }
 
 // verifyToken checks the token can actually reach the account. The

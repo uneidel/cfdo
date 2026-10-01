@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -150,7 +149,7 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 
 	conf := filepath.Join(dir, configName)
 	out := filepath.Join(dir, "bk")
-	if err := cmdBackup(context.Background(), []string{"-c", conf, "-o", out}); err != nil {
+	if err := execute(context.Background(), "backup", "-c", conf, "-o", out); err != nil {
 		t.Fatalf("backup: %v", err)
 	}
 
@@ -179,7 +178,7 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 	worker.storage = map[string]map[string]any{}
 	worker.mu.Unlock()
 
-	if err := cmdRestore(context.Background(), []string{"-c", conf, "-y", "-mode", "replace", out}); err != nil {
+	if err := execute(context.Background(), "restore", "-c", conf, "-y", "--mode", "replace", out); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	worker.mu.Lock()
@@ -211,13 +210,13 @@ func TestRestoreDetectsTamperedFile(t *testing.T) {
 
 	conf := filepath.Join(dir, configName)
 	out := filepath.Join(dir, "bk")
-	if err := cmdBackup(context.Background(), []string{"-c", conf, "-o", out}); err != nil {
+	if err := execute(context.Background(), "backup", "-c", conf, "-o", out); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(out, "objects", "0a1b.json"), []byte(`{"format":1,"kv":[]}  `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := cmdRestore(context.Background(), []string{"-c", conf, "-y", out})
+	err := execute(context.Background(), "restore", "-c", conf, "-y", out)
 	if err == nil {
 		t.Fatal("expected restore to reject a modified object file")
 	}
@@ -236,7 +235,7 @@ func TestBackupRejectsWrongSecret(t *testing.T) {
 	t.Setenv("CLOUDFLARE_API_TOKEN", "test-token")
 	t.Setenv("CFDO_SECRET", "wrong")
 
-	err := cmdBackup(context.Background(), []string{"-c", filepath.Join(dir, configName), "-o", filepath.Join(dir, "bk")})
+	err := execute(context.Background(), "backup", "-c", filepath.Join(dir, configName), "-o", filepath.Join(dir, "bk"))
 	if err == nil {
 		t.Fatal("expected backup to fail on secret mismatch")
 	}
@@ -329,7 +328,7 @@ func TestBackupDiscoversViaWorkerIndexWhenAPIListsNothing(t *testing.T) {
 	t.Setenv("CFDO_SECRET", "s3cret")
 
 	out := filepath.Join(dir, "bk")
-	if err := cmdBackup(context.Background(), []string{"-c", filepath.Join(dir, configName), "-o", out}); err != nil {
+	if err := execute(context.Background(), "backup", "-c", filepath.Join(dir, configName), "-o", out); err != nil {
 		t.Fatalf("backup: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(out, "manifest.json"))
@@ -373,7 +372,7 @@ func TestBackupIdsFileMergesWithoutDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "bk")
-	if err := cmdBackup(context.Background(), []string{"-c", filepath.Join(dir, configName), "-o", out, "-ids-file", idsFile}); err != nil {
+	if err := execute(context.Background(), "backup", "-c", filepath.Join(dir, configName), "-o", out, "--ids-file", idsFile); err != nil {
 		t.Fatalf("backup: %v", err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(out, "manifest.json"))
@@ -390,31 +389,29 @@ func TestBackupIdsFileMergesWithoutDuplicates(t *testing.T) {
 }
 
 func TestFlagsMayFollowPositionalArgs(t *testing.T) {
-	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	force := fs.Bool("force", false, "")
-	dir := fs.String("dir", "", "")
-	mode := fs.String("mode", "merge", "")
-
-	if err := fs.Parse(permute(fs, []string{"my-do", "-force", "-dir", "out", "-mode=replace"})); err != nil {
+	create := newCreateCmd()
+	if err := create.ParseFlags([]string{"my-do", "--force", "--dir", "out", "--kv=true"}); err != nil {
 		t.Fatal(err)
 	}
-	if !*force || *dir != "out" || *mode != "replace" {
-		t.Fatalf("flags after a positional were dropped: force=%v dir=%q mode=%q", *force, *dir, *mode)
+	if force, _ := create.Flags().GetBool("force"); !force {
+		t.Fatal("--force after a positional was dropped")
 	}
-	if fs.NArg() != 1 || fs.Arg(0) != "my-do" {
-		t.Fatalf("positional lost: %v", fs.Args())
+	if dir, _ := create.Flags().GetString("dir"); dir != "out" {
+		t.Fatalf("--dir after a positional was dropped: %q", dir)
+	}
+	if args := create.Flags().Args(); len(args) != 1 || args[0] != "my-do" {
+		t.Fatalf("positional lost: %v", args)
 	}
 
 	// a value that looks like a positional must stay attached to its flag
-	fs2 := flag.NewFlagSet("t2", flag.ContinueOnError)
-	fs2.SetOutput(io.Discard)
-	only := fs2.String("only", "", "")
-	if err := fs2.Parse(permute(fs2, []string{"backupdir", "-only", "abc123"})); err != nil {
+	restore := newRestoreCmd()
+	if err := restore.ParseFlags([]string{"backupdir", "--only", "abc123", "--mode=replace"}); err != nil {
 		t.Fatal(err)
 	}
-	if *only != "abc123" || fs2.NArg() != 1 || fs2.Arg(0) != "backupdir" {
-		t.Fatalf("flag value was treated as positional: only=%q args=%v", *only, fs2.Args())
+	only, _ := restore.Flags().GetString("only")
+	mode, _ := restore.Flags().GetString("mode")
+	if args := restore.Flags().Args(); only != "abc123" || mode != "replace" || len(args) != 1 || args[0] != "backupdir" {
+		t.Fatalf("flag value was treated as positional: only=%q mode=%q args=%v", only, mode, args)
 	}
 }
 
@@ -476,10 +473,8 @@ func TestInitWritesPrivateSettingsFile(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
 	t.Setenv("CFDO_SECRET", "")
 
-	err := cmdInit(context.Background(), []string{
-		"-token", "tok-abc", "-account", "acct-123",
-		"-secret", "sec-xyz", "-script", "cfdo-guestbook", "-no-verify",
-	})
+	err := execute(context.Background(), "init", "--token", "tok-abc", "--account", "acct-123",
+		"--secret", "sec-xyz", "--script", "cfdo-guestbook", "--no-verify")
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -513,7 +508,7 @@ func TestInitWritesPrivateSettingsFile(t *testing.T) {
 	}
 
 	// a second init must not clobber what is already recorded
-	if err := cmdInit(context.Background(), []string{"-account", "acct-999", "-no-verify"}); err != nil {
+	if err := execute(context.Background(), "init", "--account", "acct-999", "--no-verify"); err != nil {
 		t.Fatalf("second init: %v", err)
 	}
 	again, _ := loadSettings()
@@ -553,7 +548,7 @@ func TestCreateWritesSkill(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
 	dir := t.TempDir()
 
-	if err := cmdCreate(context.Background(), []string{"inbox-sync", "-dir", dir}); err != nil {
+	if err := execute(context.Background(), "create", "inbox-sync", "--dir", dir); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, ".claude", "skills", "inbox-sync", "SKILL.md")
@@ -608,7 +603,7 @@ func TestCreateKVSkillMakesNoSQLPromises(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
 	dir := t.TempDir()
 
-	if err := cmdCreate(context.Background(), []string{"legacy-kv", "-dir", dir, "-kv"}); err != nil {
+	if err := execute(context.Background(), "create", "legacy-kv", "--dir", dir, "--kv"); err != nil {
 		t.Fatal(err)
 	}
 	body := mustRead(t, filepath.Join(dir, ".claude", "skills", "legacy-kv", "SKILL.md"))
@@ -630,7 +625,7 @@ func TestCreateNoSkillFlag(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
 	dir := t.TempDir()
 
-	if err := cmdCreate(context.Background(), []string{"plain", "-dir", dir, "-no-skill"}); err != nil {
+	if err := execute(context.Background(), "create", "plain", "--dir", dir, "--no-skill"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".claude")); !os.IsNotExist(err) {
@@ -708,7 +703,7 @@ func TestListSortsAndMarksUndeployed(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
 
 	out := captureStdout(t, func() {
-		if err := cmdList(context.Background(), []string{"-json"}); err != nil {
+		if err := execute(context.Background(), "list", "--json"); err != nil {
 			t.Fatalf("list: %v", err)
 		}
 	})
@@ -758,7 +753,7 @@ func TestListScriptFilter(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
 
 	out := captureStdout(t, func() {
-		if err := cmdList(context.Background(), []string{"-json", "-script", "zeta-app"}); err != nil {
+		if err := execute(context.Background(), "list", "--json", "--script", "zeta-app"); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -775,7 +770,7 @@ func TestListNeedsAnAccountID(t *testing.T) {
 	t.Setenv("CFDO_HOME", t.TempDir())
 	t.Setenv("CLOUDFLARE_API_TOKEN", "tok")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
-	err := cmdList(context.Background(), []string{})
+	err := execute(context.Background(), "list")
 	if err == nil || !strings.Contains(err.Error(), "no account id") {
 		t.Fatalf("want a clear account-id error, got %v", err)
 	}

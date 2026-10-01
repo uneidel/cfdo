@@ -125,7 +125,7 @@ func resolveSecret(s *Settings, script string) (string, error) {
 			return s.Secret, nil
 		}
 	}
-	return "", fmt.Errorf("no admin secret for %q — set CFDO_SECRET or run `cfdo init -script %s`", script, script)
+	return "", fmt.Errorf("no admin secret for %q — set CFDO_SECRET or run `cfdo init --script %s`", script, script)
 }
 
 func resolveAccountID(s *Settings, fromConfig string) string {

@@ -1,17 +1,17 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	_ "embed"
 	"encoding/base64"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 //go:embed templates/worker.mjs
@@ -22,8 +22,14 @@ var skillTemplate string
 
 var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-func cmdCreate(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("create", flag.ExitOnError)
+func newCreateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create <script-name>",
+		Short: "Scaffold a new Durable Object project in a directory",
+		Long:  "Scaffolds cfdo.json and a worker module with cfdo's admin routes.",
+		Args:  cobra.ExactArgs(1),
+	}
+	fs := cmd.Flags()
 	dir := fs.String("dir", "", "directory to scaffold into (default: ./<name>)")
 	account := fs.String("account", os.Getenv("CLOUDFLARE_ACCOUNT_ID"), "Cloudflare account id")
 	class := fs.String("class", "", "Durable Object class name (default: derived from <name>)")
@@ -32,118 +38,110 @@ func cmdCreate(ctx context.Context, args []string) error {
 	compat := fs.String("compat-date", time.Now().Format("2006-01-02"), "worker compatibility date")
 	force := fs.Bool("force", false, "overwrite existing files")
 	noSkill := fs.Bool("no-skill", false, "do not write the Claude Code skill into .claude/skills/")
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "Usage: cfdo create <script-name> [flags]\n\nScaffolds cfdo.json and a worker module with cfdo's admin routes.\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(permute(fs, args)); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		fs.Usage()
-		return fmt.Errorf("expected exactly one script name")
-	}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		script := args[0]
 
-	script := fs.Arg(0)
-	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`).MatchString(script) {
-		return fmt.Errorf("script name %q must be lowercase alphanumeric with dashes", script)
-	}
-	if *class == "" {
-		*class = pascal(script)
-	}
-	if !identRe.MatchString(*class) {
-		return fmt.Errorf("class name %q is not a valid JavaScript identifier", *class)
-	}
-	if *binding == "" {
-		*binding = strings.ToUpper(screamingSnake(*class))
-	}
-	if !identRe.MatchString(*binding) {
-		return fmt.Errorf("binding name %q is not a valid identifier", *binding)
-	}
+		if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`).MatchString(script) {
+			return fmt.Errorf("script name %q must be lowercase alphanumeric with dashes", script)
+		}
+		if *class == "" {
+			*class = pascal(script)
+		}
+		if !identRe.MatchString(*class) {
+			return fmt.Errorf("class name %q is not a valid JavaScript identifier", *class)
+		}
+		if *binding == "" {
+			*binding = strings.ToUpper(screamingSnake(*class))
+		}
+		if !identRe.MatchString(*binding) {
+			return fmt.Errorf("binding name %q is not a valid identifier", *binding)
+		}
 
-	target := *dir
-	if target == "" {
-		target = script
-	}
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		return err
-	}
-
-	cfg := &Config{
-		AccountID:         *account,
-		ScriptName:        script,
-		ClassName:         *class,
-		Binding:           *binding,
-		MainModule:        "worker.mjs",
-		CompatibilityDate: *compat,
-		SQLite:            !*kv,
-		MigrationTag:      "v1",
-		WorkersDev:        true,
-	}
-	if cfg.AccountID == "" {
-		cfg.AccountID = "REPLACE_WITH_ACCOUNT_ID"
-	}
-
-	worker := strings.NewReplacer(
-		"__CLASS_NAME__", *class,
-		"__BINDING__", *binding,
-	).Replace(workerTemplate)
-
-	files := map[string]string{
-		filepath.Join(target, "worker.mjs"): worker,
-		filepath.Join(target, ".gitignore"): ".cfdo/\nbackups/\n.env\n",
-	}
-	skillPath := filepath.Join(target, ".claude", "skills", script, "SKILL.md")
-	if !*noSkill {
-		files[skillPath] = renderSkill(script, *class, *binding, !*kv)
-	}
-	for path, content := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		target := *dir
+		if target == "" {
+			target = script
+		}
+		if err := os.MkdirAll(target, 0o755); err != nil {
 			return err
 		}
-		if err := writeFile(path, []byte(content), *force); err != nil {
+
+		cfg := &Config{
+			AccountID:         *account,
+			ScriptName:        script,
+			ClassName:         *class,
+			Binding:           *binding,
+			MainModule:        "worker.mjs",
+			CompatibilityDate: *compat,
+			SQLite:            !*kv,
+			MigrationTag:      "v1",
+			WorkersDev:        true,
+		}
+		if cfg.AccountID == "" {
+			cfg.AccountID = "REPLACE_WITH_ACCOUNT_ID"
+		}
+
+		worker := strings.NewReplacer(
+			"__CLASS_NAME__", *class,
+			"__BINDING__", *binding,
+		).Replace(workerTemplate)
+
+		files := map[string]string{
+			filepath.Join(target, "worker.mjs"): worker,
+			filepath.Join(target, ".gitignore"): ".cfdo/\nbackups/\n.env\n",
+		}
+		skillPath := filepath.Join(target, ".claude", "skills", script, "SKILL.md")
+		if !*noSkill {
+			files[skillPath] = renderSkill(script, *class, *binding, !*kv)
+		}
+		for path, content := range files {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := writeFile(path, []byte(content), *force); err != nil {
+				return err
+			}
+		}
+		cfgPath := filepath.Join(target, configName)
+		if _, err := os.Stat(cfgPath); err == nil && !*force {
+			return fmt.Errorf("%s already exists (pass --force to overwrite)", cfgPath)
+		}
+		if err := cfg.save(cfgPath); err != nil {
 			return err
 		}
-	}
-	cfgPath := filepath.Join(target, configName)
-	if _, err := os.Stat(cfgPath); err == nil && !*force {
-		return fmt.Errorf("%s already exists (pass -force to overwrite)", cfgPath)
-	}
-	if err := cfg.save(cfgPath); err != nil {
-		return err
-	}
 
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return err
-	}
-	secretStr := base64.RawURLEncoding.EncodeToString(secret)
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return err
+		}
+		secretStr := base64.RawURLEncoding.EncodeToString(secret)
 
-	fmt.Printf("Created %s\n", target)
-	fmt.Printf("  %-14s %s\n", configName, "project config")
-	fmt.Printf("  %-14s %s class %s, binding %s\n", "worker.mjs", storageKind(cfg.SQLite), cfg.ClassName, cfg.Binding)
-	if !*noSkill {
-		fmt.Printf("  %-14s Claude Code skill: what DOs can do, how to implement and operate this one\n",
-			filepath.Join(".claude", "skills", script))
+		fmt.Printf("Created %s\n", target)
+		fmt.Printf("  %-14s %s\n", configName, "project config")
+		fmt.Printf("  %-14s %s class %s, binding %s\n", "worker.mjs", storageKind(cfg.SQLite), cfg.ClassName, cfg.Binding)
+		if !*noSkill {
+			fmt.Printf("  %-14s Claude Code skill: what DOs can do, how to implement and operate this one\n",
+				filepath.Join(".claude", "skills", script))
+		}
+		fmt.Println()
+		fmt.Println("Next:")
+		if cfg.AccountID == "REPLACE_WITH_ACCOUNT_ID" {
+			fmt.Printf("  1. set account_id in %s (or export CLOUDFLARE_ACCOUNT_ID)\n", filepath.Join(target, configName))
+		} else {
+			fmt.Println("  1. export CLOUDFLARE_API_TOKEN=<token with Workers Scripts:Edit>")
+		}
+		fmt.Printf("  2. export CFDO_SECRET=%s\n", secretStr)
+		fmt.Printf("  3. cd %s && cfdo upload\n", target)
+		fmt.Println()
+		fmt.Println("Keep CFDO_SECRET: it is uploaded as a worker secret and is required by backup/restore.")
+		return nil
 	}
-	fmt.Println()
-	fmt.Println("Next:")
-	if cfg.AccountID == "REPLACE_WITH_ACCOUNT_ID" {
-		fmt.Printf("  1. set account_id in %s (or export CLOUDFLARE_ACCOUNT_ID)\n", filepath.Join(target, configName))
-	} else {
-		fmt.Println("  1. export CLOUDFLARE_API_TOKEN=<token with Workers Scripts:Edit>")
-	}
-	fmt.Printf("  2. export CFDO_SECRET=%s\n", secretStr)
-	fmt.Printf("  3. cd %s && cfdo upload\n", target)
-	fmt.Println()
-	fmt.Println("Keep CFDO_SECRET: it is uploaded as a worker secret and is required by backup/restore.")
-	return nil
+	return cmd
 }
 
 func writeFile(path string, data []byte, force bool) error {
 	if !force {
 		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("%s already exists (pass -force to overwrite)", path)
+			return fmt.Errorf("%s already exists (pass --force to overwrite)", path)
 		}
 	}
 	return os.WriteFile(path, data, 0o644)

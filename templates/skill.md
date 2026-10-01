@@ -70,8 +70,8 @@ Re-arm inside `alarm()` for a repeating job, and make the handler idempotent —
 retried.
 
 **New Durable Object classes.** Add the class, then declare it: bump `migration_tag` in
-`cfdo.json` and run `cfdo upload -new-class OtherClass`. A new class also needs its own
-binding in the upload metadata, so check `cfdo upload -dry-run` before sending.
+`cfdo.json` and run `cfdo upload --new-class OtherClass`. A new class also needs its own
+binding in the upload metadata, so check `cfdo upload --dry-run` before sending.
 
 **Routing.** Derive the id from something stable in the request (a room name, a user id, a
 tenant) with `idFromName`. Use `newUniqueId()` only when nothing stable exists — and then
@@ -80,13 +80,13 @@ record the id yourself, because nothing else can enumerate it.
 ## Operating it
 
 ```sh
-cfdo list                # every DO namespace on the account (needs no project dir)
-cfdo status              # deployed? namespace id, object counts, admin health
-cfdo status -objects     # every object id with the name it was routed by
-cfdo upload              # push worker.mjs, apply any pending migration
-cfdo upload -dry-run     # print the exact upload metadata, send nothing
-cfdo backup              # -> ./backups/__SCRIPT_NAME__-<timestamp>/
-cfdo restore <dir>       # -mode merge (default) or -mode replace
+cfdo list              # every DO namespace on the account (needs no project dir)
+cfdo status            # deployed? namespace id, object counts, admin health
+cfdo status --objects  # every object id with the name it was routed by
+cfdo upload            # push worker.mjs, apply any pending migration
+cfdo upload --dry-run  # print the exact upload metadata, send nothing
+cfdo backup            # -> ./backups/__SCRIPT_NAME__-<timestamp>/
+cfdo restore <dir>     # --mode merge (default) or --mode replace
 ```
 
 Credentials come from the environment, else `~/.cfdo/settings.json` (`cfdo init`).
@@ -113,25 +113,25 @@ backup` unions the two sources, so do not rely on either alone:
 - the index is immediate, but only knows objects routed by name through the generated
   code, and never lists itself.
 
-`cfdo list -deep` shows both counts side by side. Switching to `newUniqueId()` means the
-app must record ids itself and pass them to `cfdo backup -ids-file`.
+`cfdo list --deep` shows both counts side by side. Switching to `newUniqueId()` means the
+app must record ids itself and pass them to `cfdo backup --ids-file`.
 
-**`cfdo restore -mode replace` is destructive.** It wipes each target object's storage
+**`cfdo restore --mode replace` is destructive.** It wipes each target object's storage
 first, and it is not atomic across objects: a failure partway leaves earlier objects
-already restored. Prefer `-mode merge`, and confirm with the user before running `replace`
+already restored. Prefer `--mode merge`, and confirm with the user before running `replace`
 against anything live.
 
 **A 401 from an admin route means the secret differs** from the one bound at upload time.
-Fix with `cfdo init -script __SCRIPT_NAME__ -secret ...`, then re-upload.
+Fix with `cfdo init --script __SCRIPT_NAME__ --secret ...`, then re-upload.
 
 **Deleting a class destroys its objects' data**, permanently and with no undo.
-`cfdo upload -deleted-class X` is not reversible — back up first.
+`cfdo upload --deleted-class X` is not reversible — back up first.
 
 ## Verifying a change
 
 ```sh
 cfdo upload && cfdo status
-curl "$(cfdo status -json | python3 -c 'import json,sys; print(json.load(sys.stdin)["worker_url"])')/"
+curl "$(cfdo status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["worker_url"])')/"
 ```
 
 A brand-new `workers.dev` hostname returns `tls: handshake failure` for a few minutes

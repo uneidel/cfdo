@@ -1,187 +1,190 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"text/tabwriter"
+
+	"github.com/spf13/cobra"
 )
 
-func cmdStatus(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	confPath := fs.String("c", "", "path to cfdo.json (default: nearest one up the tree)")
+func newStatusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show namespaces, object counts and deployment state",
+		Long:  "Shows the deployed script, its Durable Object namespace and object count.",
+		Args:  cobra.NoArgs,
+	}
+	fs := cmd.Flags()
+	confPath := fs.StringP("config", "c", "", "path to cfdo.json (default: nearest one up the tree)")
 	showObjects := fs.Bool("objects", false, "list every object id")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
 	noPing := fs.Bool("no-ping", false, "skip the live check against the worker's admin route")
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "Usage: cfdo status [flags]\n\nShows the deployed script, its Durable Object namespace and object count.\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(permute(fs, args)); err != nil {
-		return err
-	}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 
-	cfg, err := loadConfig(*confPath)
-	if err != nil {
-		return err
-	}
-	state, err := cfg.loadState()
-	if err != nil {
-		return err
-	}
-	token, err := cfg.token()
-	if err != nil {
-		return err
-	}
-	client := NewClient(token)
-
-	report := map[string]any{
-		"script":                cfg.ScriptName,
-		"class":                 cfg.ClassName,
-		"binding":               cfg.Binding,
-		"sqlite":                cfg.SQLite,
-		"local_migration_tag":   cfg.MigrationTag,
-		"applied_migration_tag": state.AppliedMigrationTag,
-		"last_uploaded_at":      state.LastUploadedAt,
-	}
-
-	script, err := client.GetScript(ctx, cfg.AccountID, cfg.ScriptName)
-	if err != nil {
-		return err
-	}
-	deployed := script != nil
-	report["deployed"] = deployed
-	if deployed {
-		report["modified_on"] = script.ModifiedOn
-		if settings, err := client.GetScriptSettings(ctx, cfg.AccountID, cfg.ScriptName); err == nil {
-			report["compatibility_date"] = settings.CompatibilityDate
-			if settings.MigrationTag != "" {
-				report["remote_migration_tag"] = settings.MigrationTag
-			}
-			report["bindings"] = bindingNames(settings.Bindings)
-		}
-	}
-
-	var ns *Namespace
-	var objects []DOObject
-	if deployed {
-		ns, err = client.FindNamespace(ctx, cfg.AccountID, cfg.ScriptName, cfg.ClassName)
+		cfg, err := loadConfig(*confPath)
 		if err != nil {
-			report["namespace_error"] = err.Error()
-		} else {
-			report["namespace_id"] = ns.ID
-			report["namespace_sqlite"] = ns.UseSQLite
-			objects, err = client.ListObjects(ctx, cfg.AccountID, ns.ID)
+			return err
+		}
+		state, err := cfg.loadState()
+		if err != nil {
+			return err
+		}
+		token, err := cfg.token()
+		if err != nil {
+			return err
+		}
+		client := NewClient(token)
+
+		report := map[string]any{
+			"script":                cfg.ScriptName,
+			"class":                 cfg.ClassName,
+			"binding":               cfg.Binding,
+			"sqlite":                cfg.SQLite,
+			"local_migration_tag":   cfg.MigrationTag,
+			"applied_migration_tag": state.AppliedMigrationTag,
+			"last_uploaded_at":      state.LastUploadedAt,
+		}
+
+		script, err := client.GetScript(ctx, cfg.AccountID, cfg.ScriptName)
+		if err != nil {
+			return err
+		}
+		deployed := script != nil
+		report["deployed"] = deployed
+		if deployed {
+			report["modified_on"] = script.ModifiedOn
+			if settings, err := client.GetScriptSettings(ctx, cfg.AccountID, cfg.ScriptName); err == nil {
+				report["compatibility_date"] = settings.CompatibilityDate
+				if settings.MigrationTag != "" {
+					report["remote_migration_tag"] = settings.MigrationTag
+				}
+				report["bindings"] = bindingNames(settings.Bindings)
+			}
+		}
+
+		var ns *Namespace
+		var objects []DOObject
+		if deployed {
+			ns, err = client.FindNamespace(ctx, cfg.AccountID, cfg.ScriptName, cfg.ClassName)
 			if err != nil {
-				report["objects_error"] = err.Error()
+				report["namespace_error"] = err.Error()
 			} else {
-				report["object_count"] = len(objects)
-				report["objects_with_data"] = countWithData(objects)
-				if *showObjects {
-					ids := make([]string, 0, len(objects))
-					for _, o := range objects {
-						ids = append(ids, o.ID)
+				report["namespace_id"] = ns.ID
+				report["namespace_sqlite"] = ns.UseSQLite
+				objects, err = client.ListObjects(ctx, cfg.AccountID, ns.ID)
+				if err != nil {
+					report["objects_error"] = err.Error()
+				} else {
+					report["object_count"] = len(objects)
+					report["objects_with_data"] = countWithData(objects)
+					if *showObjects {
+						ids := make([]string, 0, len(objects))
+						for _, o := range objects {
+							ids = append(ids, o.ID)
+						}
+						report["object_ids"] = ids
 					}
-					report["object_ids"] = ids
+				}
+				if state.NamespaceID != ns.ID {
+					state.NamespaceID = ns.ID
+					_ = cfg.saveState(state)
 				}
 			}
-			if state.NamespaceID != ns.ID {
-				state.NamespaceID = ns.ID
-				_ = cfg.saveState(state)
-			}
 		}
-	}
 
-	sub, _ := client.WorkersDevSubdomain(ctx, cfg.AccountID)
-	workerURL, urlErr := cfg.resolveWorkerURL(sub)
-	if urlErr == nil {
-		report["worker_url"] = workerURL
-	}
+		sub, _ := client.WorkersDevSubdomain(ctx, cfg.AccountID)
+		workerURL, urlErr := cfg.resolveWorkerURL(sub)
+		if urlErr == nil {
+			report["worker_url"] = workerURL
+		}
 
-	var indexed []indexEntry
-	if !*noPing && deployed && urlErr == nil {
-		if secret, err := cfg.secret(); err != nil {
-			report["admin"] = "skipped: no admin secret (run `cfdo init`)"
-		} else {
-			admin := newAdminClient(workerURL, secret)
-			if p, err := admin.Ping(ctx); err != nil {
-				report["admin"] = "unreachable: " + err.Error()
+		var indexed []indexEntry
+		if !*noPing && deployed && urlErr == nil {
+			if secret, err := cfg.secret(); err != nil {
+				report["admin"] = "skipped: no admin secret (run `cfdo init`)"
 			} else {
-				report["admin"] = fmt.Sprintf("ok (format %d)", p.Format)
-				if indexed, err = admin.List(ctx); err == nil {
-					report["indexed_objects"] = len(indexed)
+				admin := newAdminClient(workerURL, secret)
+				if p, err := admin.Ping(ctx); err != nil {
+					report["admin"] = "unreachable: " + err.Error()
+				} else {
+					report["admin"] = fmt.Sprintf("ok (format %d)", p.Format)
+					if indexed, err = admin.List(ctx); err == nil {
+						report["indexed_objects"] = len(indexed)
+					}
 				}
 			}
 		}
-	}
 
-	if len(indexed) > 0 {
-		report["index"] = indexed
-	}
-	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(report)
-	}
+		if len(indexed) > 0 {
+			report["index"] = indexed
+		}
+		if *asJSON {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(report)
+		}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	row := func(k string, v any) {
-		if v == nil || v == "" {
-			return
-		}
-		fmt.Fprintf(tw, "%s\t%v\n", k, v)
-	}
-	row("script", cfg.ScriptName)
-	row("account", cfg.AccountID)
-	if deployed {
-		row("deployed", "yes, modified "+script.ModifiedOn)
-	} else {
-		row("deployed", "no — run `cfdo upload`")
-	}
-	row("compatibility date", report["compatibility_date"])
-	row("class", fmt.Sprintf("%s (%s)", cfg.ClassName, storageKind(cfg.SQLite)))
-	row("binding", cfg.Binding)
-	row("bindings live", joinAny(report["bindings"]))
-	row("migration tag", migrationLine(cfg, state, report))
-	row("namespace", report["namespace_id"])
-	row("namespace error", report["namespace_error"])
-	if _, ok := report["object_count"]; ok {
-		line := fmt.Sprintf("%d via API", report["object_count"])
-		if ns != nil && ns.UseSQLite {
-			// For SQLite-backed namespaces the listing API is lagging and
-			// incomplete, so its count is a floor, not a total.
-			line += " (incomplete: the API lags for SQLite-backed namespaces)"
-		}
-		if n, ok := report["indexed_objects"]; ok {
-			line += fmt.Sprintf("; %v in the worker index", n)
-		}
-		row("objects", line)
-	}
-	row("objects error", report["objects_error"])
-	row("worker url", report["worker_url"])
-	row("admin route", report["admin"])
-	row("last upload", state.LastUploadedAt)
-	tw.Flush()
-
-	if *showObjects {
-		fmt.Println()
-		for _, o := range objects {
-			mark := " "
-			if o.HasStoredData {
-				mark = "*"
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		row := func(k string, v any) {
+			if v == nil || v == "" {
+				return
 			}
-			fmt.Printf("%s %s\n", mark, o.ID)
+			fmt.Fprintf(tw, "%s\t%v\n", k, v)
 		}
-		for _, e := range indexed {
-			fmt.Printf("  %s  %s\n", e.ID, e.Name)
+		row("script", cfg.ScriptName)
+		row("account", cfg.AccountID)
+		if deployed {
+			row("deployed", "yes, modified "+script.ModifiedOn)
+		} else {
+			row("deployed", "no — run `cfdo upload`")
 		}
-		if len(objects) == 0 && len(indexed) == 0 {
-			fmt.Println("  (no objects discovered)")
+		row("compatibility date", report["compatibility_date"])
+		row("class", fmt.Sprintf("%s (%s)", cfg.ClassName, storageKind(cfg.SQLite)))
+		row("binding", cfg.Binding)
+		row("bindings live", joinAny(report["bindings"]))
+		row("migration tag", migrationLine(cfg, state, report))
+		row("namespace", report["namespace_id"])
+		row("namespace error", report["namespace_error"])
+		if _, ok := report["object_count"]; ok {
+			line := fmt.Sprintf("%d via API", report["object_count"])
+			if ns != nil && ns.UseSQLite {
+				// For SQLite-backed namespaces the listing API is lagging and
+				// incomplete, so its count is a floor, not a total.
+				line += " (incomplete: the API lags for SQLite-backed namespaces)"
+			}
+			if n, ok := report["indexed_objects"]; ok {
+				line += fmt.Sprintf("; %v in the worker index", n)
+			}
+			row("objects", line)
 		}
+		row("objects error", report["objects_error"])
+		row("worker url", report["worker_url"])
+		row("admin route", report["admin"])
+		row("last upload", state.LastUploadedAt)
+		tw.Flush()
+
+		if *showObjects {
+			fmt.Println()
+			for _, o := range objects {
+				mark := " "
+				if o.HasStoredData {
+					mark = "*"
+				}
+				fmt.Printf("%s %s\n", mark, o.ID)
+			}
+			for _, e := range indexed {
+				fmt.Printf("  %s  %s\n", e.ID, e.Name)
+			}
+			if len(objects) == 0 && len(indexed) == 0 {
+				fmt.Println("  (no objects discovered)")
+			}
+		}
+		return nil
 	}
-	return nil
+	return cmd
 }
 
 func migrationLine(cfg *Config, state *State, report map[string]any) string {

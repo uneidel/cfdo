@@ -37,7 +37,7 @@ cfdo backup            # captures the messages table: schema + rows
 - **SQLite storage** — `CREATE TABLE IF NOT EXISTS` in the constructor, then
   plain `sql.exec` with bound parameters.
 - **Backup of SQL data.** Verified live: five messages backed up at three, two
-  more posted, then `cfdo restore -mode replace` returned the room to exactly
+  more posted, then `cfdo restore --mode replace` returned the room to exactly
   the three original rows while a sibling room was untouched.
 - **Output escaping.** Message bodies go through `esc()`; a posted
   `<script>alert(1)</script>` renders as text.
