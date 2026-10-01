@@ -1,0 +1,11 @@
+{
+  "account_id": "REPLACE_WITH_ACCOUNT_ID",
+  "script_name": "cfdo-guestbook",
+  "class_name": "Guestbook",
+  "binding": "GUESTBOOK",
+  "main_module": "worker.mjs",
+  "compatibility_date": "2026-09-30",
+  "sqlite": true,
+  "migration_tag": "v1",
+  "workers_dev": true
+}

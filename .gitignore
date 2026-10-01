@@ -1,0 +1,11 @@
+# built binary
+/cfdo
+
+# never commit credentials
+creds.md
+.env
+*.pem
+
+# per-project cfdo state and backups live in the scaffolded dirs
+.cfdo/
+backups/
