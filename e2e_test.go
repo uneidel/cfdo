@@ -636,6 +636,63 @@ func TestCreateNoSkillFlag(t *testing.T) {
 	}
 }
 
+func TestCreateSharesSecretUnlessCustom(t *testing.T) {
+	t.Setenv("CFDO_HOME", t.TempDir())
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+	t.Setenv("CFDO_SECRET", "")
+	ctx := context.Background()
+
+	if err := execute(ctx, "create", "first", "--dir", t.TempDir(), "--no-skill"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := loadSettings()
+	shared := s.Secret
+	if shared == "" {
+		t.Fatal("create should generate a shared secret when none exists")
+	}
+
+	if err := execute(ctx, "create", "second", "--dir", t.TempDir(), "--no-skill"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = loadSettings()
+	if s.Secret != shared {
+		t.Fatal("a second create must reuse the shared secret, not replace it")
+	}
+	if len(s.Scripts) != 0 {
+		t.Fatalf("default create should not record per-script secrets: %+v", s.Scripts)
+	}
+
+	if err := execute(ctx, "create", "own", "--dir", t.TempDir(), "--no-skill", "--custom-secret"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = loadSettings()
+	own := s.Scripts["own"].Secret
+	if own == "" || own == shared {
+		t.Fatalf("--custom-secret should record a distinct per-script secret, got %q", own)
+	}
+	if s.Secret != shared {
+		t.Fatal("--custom-secret must leave the shared secret alone")
+	}
+	for script, want := range map[string]string{"first": shared, "second": shared, "own": own} {
+		if got, _ := resolveSecret(s, script); got != want {
+			t.Fatalf("%s resolved the wrong secret", script)
+		}
+	}
+}
+
+func TestCreateAdoptsExportedSecret(t *testing.T) {
+	t.Setenv("CFDO_HOME", t.TempDir())
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+	t.Setenv("CFDO_SECRET", "from-env")
+
+	if err := execute(context.Background(), "create", "envy", "--dir", t.TempDir(), "--no-skill"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := loadSettings(); s.Secret != "from-env" {
+		t.Fatalf("create should save an exported CFDO_SECRET as the shared one, got %q", s.Secret)
+	}
+}
+
 func mustRead(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -793,4 +850,101 @@ func captureStdout(t *testing.T, fn func()) string {
 	w.Close()
 	os.Stdout = saved
 	return <-done
+}
+
+func TestScanAssetsSkipsHiddenAndGuardsAdminRoutes(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"index.html":   "<h1>hi</h1>",
+		"css/site.css": "body{}",
+		".DS_Store":    "junk",
+		".git/HEAD":    "ref",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+	}
+	files, err := scanAssets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range files {
+		got = append(got, f.Path)
+		if len(f.Hash) != 32 {
+			t.Fatalf("hash for %s is %q, want 32 hex chars", f.Path, f.Hash)
+		}
+	}
+	if strings.Join(got, ",") != "/css/site.css,/index.html" {
+		t.Fatalf("scanned %v", got)
+	}
+
+	os.MkdirAll(filepath.Join(dir, "__cfdo"), 0o755)
+	os.WriteFile(filepath.Join(dir, "__cfdo", "objects"), []byte("x"), 0o644)
+	if _, err := scanAssets(dir); err == nil || !strings.Contains(err.Error(), "admin routes") {
+		t.Fatalf("want admin-route error, got %v", err)
+	}
+}
+
+func TestUploadAssetsSendsOnlyRequestedBuckets(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "index.html"), []byte("<h1>hi</h1>"), 0o644)
+	os.WriteFile(filepath.Join(dir, "app.js"), []byte("1"), 0o644)
+	files, err := scanAssets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want string
+	for _, f := range files {
+		if f.Path == "/index.html" {
+			want = f.Hash
+		}
+	}
+
+	var sentParts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/workers/scripts/s/assets-upload-session"):
+			if r.Header.Get("Authorization") != "Bearer api-token" {
+				t.Errorf("session call used %q", r.Header.Get("Authorization"))
+			}
+			var body struct {
+				Manifest map[string]manifestEntry `json:"manifest"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			if len(body.Manifest) != 2 || body.Manifest["/index.html"].Hash != want {
+				t.Errorf("manifest %+v", body.Manifest)
+			}
+			fmt.Fprintf(rw, `{"success":true,"result":{"jwt":"upload-jwt","buckets":[[%q]]}}`, want)
+		case strings.HasSuffix(r.URL.Path, "/workers/assets/upload"):
+			if r.Header.Get("Authorization") != "Bearer upload-jwt" {
+				t.Errorf("bucket upload used %q", r.Header.Get("Authorization"))
+			}
+			if r.URL.Query().Get("base64") != "true" {
+				t.Errorf("missing base64=true")
+			}
+			r.ParseMultipartForm(1 << 20)
+			for k := range r.MultipartForm.File {
+				sentParts = append(sentParts, k)
+			}
+			io.WriteString(rw, `{"success":true,"result":{"jwt":"completion-jwt"}}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(rw, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient("api-token")
+	c.Base = srv.URL
+	jwt, n, err := c.UploadAssets(context.Background(), "acct", "s", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jwt != "completion-jwt" || n != 1 {
+		t.Fatalf("jwt %q, uploaded %d", jwt, n)
+	}
+	if len(sentParts) != 1 || sentParts[0] != want {
+		t.Fatalf("uploaded parts %v, want only %s", sentParts, want)
+	}
 }

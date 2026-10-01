@@ -14,8 +14,8 @@ const (
 	accountPlaceholder = "REPLACE_WITH_ACCOUNT_ID"
 )
 
-// ScriptEntry holds values that differ per worker. Secrets do: two projects
-// on the same account have two different CFDO_SECRETs.
+// ScriptEntry holds values that differ per worker. Scripts share the global
+// cfdo_secret unless created with --custom-secret, which records one here.
 type ScriptEntry struct {
 	Secret string `json:"cfdo_secret,omitempty"`
 }
@@ -111,8 +111,8 @@ func resolveAPIToken(s *Settings) (string, error) {
 	return "", fmt.Errorf("no Cloudflare API token — set CLOUDFLARE_API_TOKEN or run `cfdo init`")
 }
 
-// resolveSecret prefers a secret recorded for this specific script, because a
-// single global secret is wrong as soon as there are two projects.
+// resolveSecret prefers a secret recorded for this specific script, so a script
+// created with --custom-secret keeps its own while the rest share cfdo_secret.
 func resolveSecret(s *Settings, script string) (string, error) {
 	if v := strings.TrimSpace(os.Getenv("CFDO_SECRET")); v != "" {
 		return v, nil

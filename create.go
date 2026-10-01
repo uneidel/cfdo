@@ -38,6 +38,7 @@ func newCreateCmd() *cobra.Command {
 	compat := fs.String("compat-date", time.Now().Format("2006-01-02"), "worker compatibility date")
 	force := fs.Bool("force", false, "overwrite existing files")
 	noSkill := fs.Bool("no-skill", false, "do not write the Claude Code skill into .claude/skills/")
+	customSecret := fs.Bool("custom-secret", false, "generate an admin secret for this script only instead of using the shared one")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		script := args[0]
 
@@ -109,11 +110,14 @@ func newCreateCmd() *cobra.Command {
 			return err
 		}
 
-		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
+		settings, err := loadSettings()
+		if err != nil {
 			return err
 		}
-		secretStr := base64.RawURLEncoding.EncodeToString(secret)
+		secretNote, err := assignSecret(settings, script, *customSecret)
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Created %s\n", target)
 		fmt.Printf("  %-14s %s\n", configName, "project config")
@@ -129,13 +133,59 @@ func newCreateCmd() *cobra.Command {
 		} else {
 			fmt.Println("  1. export CLOUDFLARE_API_TOKEN=<token with Workers Scripts:Edit>")
 		}
-		fmt.Printf("  2. export CFDO_SECRET=%s\n", secretStr)
-		fmt.Printf("  3. cd %s && cfdo upload\n", target)
+		fmt.Printf("  2. cd %s && cfdo upload\n", target)
 		fmt.Println()
-		fmt.Println("Keep CFDO_SECRET: it is uploaded as a worker secret and is required by backup/restore.")
+		fmt.Println(secretNote)
 		return nil
 	}
 	return cmd
+}
+
+// assignSecret records which admin secret the new script will use. By default
+// every script shares the global cfdo_secret, generated on first use; a custom
+// secret is scoped to this script alone.
+func assignSecret(s *Settings, script string, custom bool) (string, error) {
+	if custom {
+		secret, err := randomSecret()
+		if err != nil {
+			return "", err
+		}
+		s.setScriptSecret(script, secret)
+		if err := s.save(); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Admin secret: generated for %s only, saved as scripts.%s.cfdo_secret in %s.", script, script, s.path), nil
+	}
+
+	note := fmt.Sprintf("Admin secret: using the shared cfdo_secret from %s.", s.path)
+	if s.Secret == "" {
+		// Adopt an exported CFDO_SECRET rather than generating a value it would shadow.
+		secret := strings.TrimSpace(os.Getenv("CFDO_SECRET"))
+		note = fmt.Sprintf("Admin secret: saved CFDO_SECRET as the shared cfdo_secret in %s.", s.path)
+		if secret == "" {
+			var err error
+			if secret, err = randomSecret(); err != nil {
+				return "", err
+			}
+			note = fmt.Sprintf("Admin secret: generated a shared cfdo_secret, saved in %s.", s.path)
+		}
+		s.Secret = secret
+		if err := s.save(); err != nil {
+			return "", err
+		}
+	}
+	if entry, ok := s.Scripts[script]; ok && entry.Secret != "" {
+		note += fmt.Sprintf("\nNote: scripts.%s.cfdo_secret is already set and overrides the shared one.", script)
+	}
+	return note, nil
+}
+
+func randomSecret() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 func writeFile(path string, data []byte, force bool) error {

@@ -26,6 +26,7 @@ type Config struct {
 	MigrationTag      string `json:"migration_tag"`
 	WorkerURL         string `json:"worker_url,omitempty"`
 	WorkersDev        bool   `json:"workers_dev"`
+	Assets            string `json:"assets,omitempty"` // directory served as static files, e.g. "public"
 
 	dir      string    // directory the config was loaded from; not serialised
 	settings *Settings // user-wide fallbacks, loaded alongside

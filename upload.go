@@ -30,7 +30,7 @@ func newUploadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upload",
 		Short: "Upload the worker script (and DO migrations) to Cloudflare",
-		Long:  "Uploads the worker module and applies any pending Durable Object migration.",
+		Long:  "Uploads the worker module and the static assets directory, and applies any pending Durable Object migration.",
 		Args:  cobra.NoArgs,
 	}
 	fs := cmd.Flags()
@@ -40,6 +40,7 @@ func newUploadCmd() *cobra.Command {
 	newClasses := fs.StringArray("new-class", nil, "additional class to create in this migration (repeatable)")
 	deletedClasses := fs.StringArray("deleted-class", nil, "class to delete in this migration — destroys its objects (repeatable)")
 	renamedClasses := fs.StringArray("renamed-class", nil, "class rename as old=new (repeatable)")
+	noAssets := fs.Bool("no-assets", false, "skip the assets directory; the deployed worker then serves no static files")
 	noSecret := fs.Bool("no-secret", false, "do not bind CFDO_SECRET (backup/restore will stop working)")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -57,6 +58,14 @@ func newUploadCmd() *cobra.Command {
 		src, err := os.ReadFile(modPath)
 		if err != nil {
 			return fmt.Errorf("reading main module: %w", err)
+		}
+
+		var assets []assetFile
+		if cfg.Assets != "" && !*noAssets {
+			assets, err = scanAssets(filepath.Join(cfg.dir, cfg.Assets))
+			if err != nil {
+				return err
+			}
 		}
 
 		targetTag := cfg.MigrationTag
@@ -82,20 +91,34 @@ func newUploadCmd() *cobra.Command {
 			})
 		}
 
+		if assets != nil {
+			if cfg.Binding == "ASSETS" {
+				return fmt.Errorf("binding name ASSETS is reserved for the static assets binding; rename %s's binding in %s", cfg.ClassName, configName)
+			}
+			bindings = append(bindings, map[string]any{"type": "assets", "name": "ASSETS"})
+		}
+
 		metadata := map[string]any{
 			"main_module":        cfg.MainModule,
 			"compatibility_date": cfg.CompatibilityDate,
 			"bindings":           bindings,
 		}
+		// Static assets are matched first; anything without a file falls
+		// through to the worker, so API and admin routes keep working.
+		assetsMeta := map[string]any{
+			"jwt": "<from asset upload session>",
+			"config": map[string]any{
+				"html_handling":      "auto-trailing-slash",
+				"not_found_handling": "none",
+			},
+		}
+		if assets != nil {
+			metadata["assets"] = assetsMeta
+		}
 
 		mig, reason := planMigration(cfg, state, targetTag, *newClasses, *deletedClasses, *renamedClasses)
 		if mig != nil {
 			metadata["migrations"] = mig
-		}
-
-		body, err := json.MarshalIndent(metadata, "", "  ")
-		if err != nil {
-			return err
 		}
 
 		if *dryRun {
@@ -105,6 +128,12 @@ func newUploadCmd() *cobra.Command {
 			}
 			fmt.Printf("PUT /accounts/%s/workers/scripts/%s\n\n%s\n\nmodule: %s (%d bytes)\nmigration: %s\n",
 				cfg.AccountID, cfg.ScriptName, redacted, cfg.MainModule, len(src), reason)
+			if assets != nil {
+				fmt.Printf("assets: %d files, %d bytes from %s/\n", len(assets), assetsTotalSize(assets), cfg.Assets)
+				for _, a := range assets {
+					fmt.Printf("  %s (%d bytes)\n", a.Path, a.Size)
+				}
+			}
 			return nil
 		}
 
@@ -113,6 +142,20 @@ func newUploadCmd() *cobra.Command {
 			return err
 		}
 		client := NewClient(token)
+
+		if assets != nil {
+			jwt, n, err := client.UploadAssets(ctx, cfg.AccountID, cfg.ScriptName, assets)
+			if err != nil {
+				return err
+			}
+			assetsMeta["jwt"] = jwt
+			fmt.Printf("Assets: %d files from %s/ (%d new, rest unchanged)\n", len(assets), cfg.Assets, n)
+		}
+
+		body, err := json.MarshalIndent(metadata, "", "  ")
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Uploading %s (%s, %d bytes) — %s\n", cfg.ScriptName, cfg.MainModule, len(src), reason)
 		info, err := client.UploadScript(ctx, cfg.AccountID, cfg.ScriptName, body, []Module{{

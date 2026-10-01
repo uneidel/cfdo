@@ -12,6 +12,7 @@ description: Work on the __SCRIPT_NAME__ Cloudflare Durable Object project - wha
 | Binding | `env.__BINDING__` |
 | Entry point | `worker.mjs` |
 | Project config | `cfdo.json` — commit it |
+| Static files | the directory named by `assets` in `cfdo.json` (unset = none) |
 | Applied migration | `.cfdo/state.json` — do not commit |
 
 Two marked regions in `worker.mjs` are yours: the class's `app()` method (`your code`) and
@@ -73,6 +74,14 @@ retried.
 `cfdo.json` and run `cfdo upload --new-class OtherClass`. A new class also needs its own
 binding in the upload metadata, so check `cfdo upload --dry-run` before sending.
 
+**Web pages and static files.** Do not inline HTML, CSS or client JS into `worker.mjs`.
+Put them in a directory (conventionally `public/`), set `"assets": "public"` in
+`cfdo.json`, and `cfdo upload` publishes it: `public/index.html` is served at `/`,
+`public/app.js` at `/app.js`. Files are matched before the worker runs, so the worker only
+sees requests with no matching file — give the API its own prefix (`/api/...`) and fetch it
+from the page. Never put anything under `public/__cfdo/`; upload refuses it because it
+would shadow the admin routes. `env.ASSETS.fetch(request)` reads a file from worker code.
+
 **Routing.** Derive the id from something stable in the request (a room name, a user id, a
 tenant) with `idFromName`. Use `newUniqueId()` only when nothing stable exists — and then
 record the id yourself, because nothing else can enumerate it.
@@ -83,7 +92,7 @@ record the id yourself, because nothing else can enumerate it.
 cfdo list              # every DO namespace on the account (needs no project dir)
 cfdo status            # deployed? namespace id, object counts, admin health
 cfdo status --objects  # every object id with the name it was routed by
-cfdo upload            # push worker.mjs, apply any pending migration
+cfdo upload            # push worker.mjs and the assets dir, apply any pending migration
 cfdo upload --dry-run  # print the exact upload metadata, send nothing
 cfdo backup            # -> ./backups/__SCRIPT_NAME__-<timestamp>/
 cfdo restore <dir>     # --mode merge (default) or --mode replace
@@ -133,6 +142,9 @@ Fix with `cfdo init --script __SCRIPT_NAME__ --secret ...`, then re-upload.
 cfdo upload && cfdo status
 curl "$(cfdo status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["worker_url"])')/"
 ```
+
+`cfdo upload --dry-run` lists every static file it would publish — check it when a page
+404s or still shows old content.
 
 A brand-new `workers.dev` hostname returns `tls: handshake failure` for a few minutes
 while its certificate is issued. The script, its bindings and the namespace are already

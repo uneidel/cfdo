@@ -34,9 +34,8 @@ secret, and `backup`/`restore` drive it over HTTPS. Delete those routes from the
 ```sh
 cfdo init                           # prompts, writes ~/.cfdo/settings.json (0600)
 
-cfdo create chat-room               # scaffolds ./chat-room, prints a secret
+cfdo create chat-room               # scaffolds ./chat-room, uses the shared admin secret
 cd chat-room
-cfdo init --script chat-room --secret <that secret>
 
 cfdo upload                         # uploads worker.mjs, applies the v1 migration
 cfdo status                         # deployment, namespace, objects, admin health
@@ -62,9 +61,9 @@ cfdo init --script my-do --generate-secret       # generate one instead
 cfdo init --show                                 # what is stored, and what resolves
 ```
 
-**Admin secrets are per script.** Two projects on one account have two different secrets,
-so `--script <name>` scopes a secret to that script and a bare `--secret` sets only a
-fallback. Re-running `init` updates what you pass and leaves the rest alone; `--force`
+**Admin secrets are shared by default.** Every script uses the global `cfdo_secret` unless
+it has its own: `cfdo create --custom-secret` or `init --script <name>` records one under
+`scripts.<name>`, and a bare `--secret` sets the shared one. Re-running `init` updates what you pass and leaves the rest alone; `--force`
 re-prompts for values already set. Nothing ever prints a credential in full.
 
 Resolution order, most specific first:
@@ -79,7 +78,10 @@ Resolution order, most specific first:
 
 Writes `cfdo.json`, a `worker.mjs` containing a Durable Object class plus the admin
 routes, a `.gitignore`, and a Claude Code skill at `.claude/skills/<name>/SKILL.md`.
-Prints a freshly generated 32-byte secret.
+Uses the shared `cfdo_secret` from `~/.cfdo/settings.json` as the admin secret, generating
+a 32-byte one there on first use (or adopting an exported `CFDO_SECRET`). With
+`--custom-secret` it instead generates a secret for this script alone, saved as
+`scripts.<name>.cfdo_secret`.
 
 Two regions of `worker.mjs` are marked as yours — the class's `app()` method and the
 default export's routing. The rest is cfdo machinery.
@@ -92,6 +94,7 @@ default export's routing. The rest is cfdo machinery.
 | `--compat-date` | worker compatibility date (default: today) |
 | `--account` | account id to write into `cfdo.json` |
 | `--no-skill` | do not write the Claude Code skill |
+| `--custom-secret` | generate an admin secret for this script instead of using the shared one |
 | `--force` | overwrite existing files |
 
 The generated skill covers what Durable Objects can do, how to implement against this
@@ -135,6 +138,18 @@ The secret is uploaded as a `secret_text` binding on every upload, so the value 
 locally is always the one the worker checks.
 
 **Deleting a class destroys its objects' data**, permanently. Back up first.
+
+**Static files.** Set `"assets": "public"` in `cfdo.json` and every upload also publishes
+that directory through Cloudflare's static assets: `public/index.html` is served at `/`,
+`public/css/site.css` at `/css/site.css`, with no worker code. A request that matches no
+file falls through to the worker, so API and admin routes keep working. The worker can
+also read files through the `ASSETS` binding (`env.ASSETS.fetch(request)`).
+
+- Only changed files are sent; Cloudflare keeps the rest by content hash.
+- Hidden files and directories (`.DS_Store`, `.git/`) are skipped, files over 25 MiB are
+  refused, and so is anything under `public/__cfdo/`, which would shadow the admin routes.
+- `--no-assets` uploads the worker alone. Cloudflare then serves **no** static files until
+  the next full upload.
 
 ### `cfdo status`
 
