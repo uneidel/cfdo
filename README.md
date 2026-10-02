@@ -1,13 +1,26 @@
 # cfdo
 
-A single-binary CLI for operating Cloudflare Durable Objects: scaffold a project, upload
-the worker, see what exists, and back up or restore object storage.
-
-Go standard library only — no dependencies, no `node_modules`.
+**A single-binary CLI for operating Cloudflare Durable Objects.** Scaffold a project, upload
+the worker, see what is deployed, and back up or restore the storage inside every object.
+No Node, no `wrangler`, no `node_modules`.
 
 ```sh
-go build -o cfdo .
+cfdo init                 # store credentials once
+cfdo create chat-room     # scaffold a worker + Durable Object class
+cd chat-room && cfdo upload
+cfdo backup               # every object's storage, to disk
 ```
+
+- [Why cfdo](#why-cfdo)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+- [How objects are discovered](#how-objects-are-discovered)
+- [Storage fidelity](#storage-fidelity)
+- [First deploy on a fresh account](#first-deploy-on-a-fresh-account)
+- [Files](#files) · [Environment](#environment) · [Tests](#tests)
+
+## Why cfdo
 
 | Command | What it does |
 |---|---|
@@ -15,9 +28,18 @@ go build -o cfdo .
 | `cfdo create <name>` | scaffold a project (worker, config, Claude Code skill) |
 | `cfdo list` | every Durable Object namespace on the account |
 | `cfdo upload` | push the worker and apply class migrations |
-| `cfdo status` | deployment, namespace, object counts, admin health |
+| `cfdo status [<script> \| --ns <ns>]` | deployment, namespace, object counts, admin health |
 | `cfdo backup` | dump every object's storage to a directory |
 | `cfdo restore <dir>` | load a backup back into the objects |
+| `cfdo delete <script> \| --ns <ns>` | delete a worker and all its Durable Object data |
+
+- **Backups that actually contain your data**, with checksums and a manifest, restorable
+  in merge or point-in-time replace mode.
+- **Migrations handled for you.** cfdo tracks which tag Cloudflare has applied and sends the
+  right `old_tag → new_tag` step.
+- **Works from anywhere.** `list`, `status <script>` and `delete` need no project directory.
+- **Static assets** served next to the worker from a `public/` directory.
+- **A generated Claude Code skill** in every project, so an agent knows how to build on it.
 
 ## The one thing to know about backups
 
@@ -28,6 +50,21 @@ has to run code inside the object.
 So `cfdo create` scaffolds a worker with a `/__cfdo/` admin route guarded by a shared
 secret, and `backup`/`restore` drive it over HTTPS. Delete those routes from the generated
 `worker.mjs` and backup stops working; everything else keeps working.
+
+## Install
+
+Requires Go 1.26 or newer.
+
+```sh
+git clone https://git.kat56.de/ulrich/cfdo.git
+cd cfdo
+go build -o cfdo .
+sudo install cfdo /usr/local/bin/   # or anywhere on your $PATH
+```
+
+Shell completion is built in: `cfdo completion bash|zsh|fish|powershell --help`.
+
+You need a Cloudflare API token with **Workers Scripts:Edit** and **Account Settings:Read**.
 
 ## Quick start
 
@@ -160,6 +197,17 @@ object counts from both sources, the worker URL, and whether the admin route ans
 Because it compares the local migration tag against what Cloudflare reports, this is the
 command to run when an upload fails with a tag mismatch.
 
+```sh
+cfdo status                 # the project in the nearest cfdo.json
+cfdo status chat-room       # any script on the account, from anywhere
+cfdo status --ns <ns>       # the script owning a namespace (id or name)
+```
+
+With a script or `--ns` no `cfdo.json` is needed: the account comes from `--account`,
+the environment or `~/.cfdo/settings.json`, every namespace the script defines is shown,
+and the admin check uses the script's recorded secret over workers.dev. There is no local
+migration state to compare against in this form.
+
 ### `cfdo backup`
 
 Discovers every object, exports each through the worker, and writes:
@@ -195,6 +243,26 @@ Verifies each file against its manifest checksum, then pushes it back.
 Restores are **not atomic across objects**: each is replaced independently, and a failure
 partway leaves earlier objects already restored. Failures print to stderr and the command
 exits non-zero.
+
+### `cfdo delete <script> | --ns <namespace>`
+
+Deletes a worker **and every Durable Object namespace it defines, with all their data**.
+`--ns` takes a namespace id or name and deletes the script that owns it — Cloudflare
+removes a script's namespaces together, so the script's other namespaces go too. The
+command lists everything that will be removed before asking.
+
+```sh
+cfdo delete chat-room           # prompts: type the script name to confirm
+cfdo delete --ns <ns> --yes     # scripted
+```
+
+- Needs no `cfdo.json`; `--account` picks a different account.
+- Without a terminal it refuses unless `-y`/`--yes` is given.
+- Run from inside the matching project, it also resets `.cfdo/state.json` so the next
+  `cfdo upload` recreates the classes from scratch.
+- Per-script secrets in `~/.cfdo/settings.json` are left in place.
+
+This cannot be undone. Run `cfdo backup` first.
 
 ## How objects are discovered
 

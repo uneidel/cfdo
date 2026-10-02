@@ -3,6 +3,7 @@
 
 # never commit credentials
 creds.md
+keys.md
 .env
 *.pem
 

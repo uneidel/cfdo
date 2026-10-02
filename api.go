@@ -381,3 +381,14 @@ func asHTTPError(err error, target **HTTPError) bool {
 	}
 	return false
 }
+
+// DeleteScript removes a worker. With force, Cloudflare also deletes the
+// Durable Object namespaces the script defines — and every object's data.
+func (c *Client) DeleteScript(ctx context.Context, accountID, script string, force bool) error {
+	path := fmt.Sprintf("/accounts/%s/workers/scripts/%s", url.PathEscape(accountID), url.PathEscape(script))
+	if force {
+		path += "?force=true"
+	}
+	_, err := c.request(ctx, http.MethodDelete, path, nil, "", nil)
+	return err
+}

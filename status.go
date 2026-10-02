@@ -11,18 +11,34 @@ import (
 
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   "status [script] [--ns <namespace>]",
 		Short: "Show namespaces, object counts and deployment state",
-		Long:  "Shows the deployed script, its Durable Object namespace and object count.",
-		Args:  cobra.NoArgs,
+		Long: `Shows the deployed script, its Durable Object namespace and object count.
+
+With no argument it reports on the project in the nearest cfdo.json. Name a
+script, or pass --ns with a namespace id or name, to inspect any worker on the
+account from anywhere — without a cfdo.json there is no local migration state.`,
+		Args: cobra.MaximumNArgs(1),
 	}
 	fs := cmd.Flags()
 	confPath := fs.StringP("config", "c", "", "path to cfdo.json (default: nearest one up the tree)")
 	showObjects := fs.Bool("objects", false, "list every object id")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
 	noPing := fs.Bool("no-ping", false, "skip the live check against the worker's admin route")
+	ns := fs.String("ns", "", "report on the script that owns this namespace (id or name)")
+	account := fs.String("account", "", "Cloudflare account id for a script or --ns (default: environment, else ~/.cfdo/settings.json)")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+		if len(args) == 1 || *ns != "" {
+			if *confPath != "" {
+				return fmt.Errorf("-c/--config applies to the local project; drop it when naming a script or --ns")
+			}
+			script := ""
+			if len(args) == 1 {
+				script = args[0]
+			}
+			return remoteStatus(ctx, *account, script, *ns, *showObjects, *asJSON, *noPing)
+		}
 
 		cfg, err := loadConfig(*confPath)
 		if err != nil {
