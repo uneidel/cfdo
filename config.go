@@ -16,19 +16,21 @@ const (
 
 // Config is the project file (cfdo.json) written by `cfdo create`.
 type Config struct {
-	AccountID         string `json:"account_id"`
-	ScriptName        string `json:"script_name"`
-	ClassName         string `json:"class_name"`
-	Binding           string `json:"binding"`
-	MainModule        string `json:"main_module"`
-	CompatibilityDate string `json:"compatibility_date"`
-	SQLite            bool   `json:"sqlite"`
-	MigrationTag      string `json:"migration_tag"`
-	WorkerURL         string `json:"worker_url,omitempty"`
-	WorkersDev        bool   `json:"workers_dev"`
-	Assets            string `json:"assets,omitempty"` // directory served as static files, e.g. "public"
+	AccountID         string       `json:"account_id"`
+	ScriptName        string       `json:"script_name"`
+	ClassName         string       `json:"class_name"`
+	Binding           string       `json:"binding"`
+	MainModule        string       `json:"main_module"`
+	CompatibilityDate string       `json:"compatibility_date"`
+	SQLite            bool         `json:"sqlite"`
+	MigrationTag      string       `json:"migration_tag"`
+	WorkerURL         string       `json:"worker_url,omitempty"`
+	WorkersDev        bool         `json:"workers_dev"`
+	Assets            string       `json:"assets,omitempty"` // directory served as static files, e.g. "public"
+	Plugins           []PluginLock `json:"plugins,omitempty"`
 
 	dir      string    // directory the config was loaded from; not serialised
+	path     string    // the config file itself
 	settings *Settings // user-wide fallbacks, loaded alongside
 }
 
@@ -65,6 +67,7 @@ func loadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	c.dir = filepath.Dir(abs)
+	c.path = abs
 
 	settings, err := loadSettings()
 	if err != nil {

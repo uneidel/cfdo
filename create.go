@@ -38,6 +38,7 @@ func newCreateCmd() *cobra.Command {
 	compat := fs.String("compat-date", time.Now().Format("2006-01-02"), "worker compatibility date")
 	force := fs.Bool("force", false, "overwrite existing files")
 	noSkill := fs.Bool("no-skill", false, "do not write the Claude Code skill into .claude/skills/")
+	plugins := fs.StringArray("plugin", nil, "vendor the plugin in this source directory (repeatable; see `cfdo plugin`)")
 	customSecret := fs.Bool("custom-secret", false, "generate an admin secret for this script only instead of using the shared one")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		script := args[0]
@@ -106,6 +107,15 @@ func newCreateCmd() *cobra.Command {
 		if _, err := os.Stat(cfgPath); err == nil && !*force {
 			return fmt.Errorf("%s already exists (pass --force to overwrite)", cfgPath)
 		}
+		cfg.dir = target
+		var added []*PluginLock
+		for _, src := range *plugins {
+			lock, _, err := addPlugin(cfg, src)
+			if err != nil {
+				return err
+			}
+			added = append(added, lock)
+		}
 		if err := cfg.save(cfgPath); err != nil {
 			return err
 		}
@@ -125,6 +135,10 @@ func newCreateCmd() *cobra.Command {
 		if !*noSkill {
 			fmt.Printf("  %-14s Claude Code skill: what DOs can do, how to implement and operate this one\n",
 				filepath.Join(".claude", "skills", script))
+		}
+		for _, l := range added {
+			fmt.Printf("  %-14s plugin %s, skill in %s\n", filepath.Join(pluginsDir, l.Name)+"/",
+				describeLock(l), filepath.Join(".claude", "skills", l.Name))
 		}
 		fmt.Println()
 		fmt.Println("Next:")

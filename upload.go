@@ -54,10 +54,9 @@ func newUploadCmd() *cobra.Command {
 			return err
 		}
 
-		modPath := filepath.Join(cfg.dir, cfg.MainModule)
-		src, err := os.ReadFile(modPath)
+		modules, err := collectModules(cfg.dir, cfg.MainModule)
 		if err != nil {
-			return fmt.Errorf("reading main module: %w", err)
+			return err
 		}
 
 		var assets []assetFile
@@ -126,8 +125,11 @@ func newUploadCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("PUT /accounts/%s/workers/scripts/%s\n\n%s\n\nmodule: %s (%d bytes)\nmigration: %s\n",
-				cfg.AccountID, cfg.ScriptName, redacted, cfg.MainModule, len(src), reason)
+			fmt.Printf("PUT /accounts/%s/workers/scripts/%s\n\n%s\n\nmigration: %s\nmodules: %d, %d bytes\n",
+				cfg.AccountID, cfg.ScriptName, redacted, reason, len(modules), modulesSize(modules))
+			for _, m := range modules {
+				fmt.Printf("  %s (%s, %d bytes)\n", m.Name, m.ContentType, len(m.Data))
+			}
 			if assets != nil {
 				fmt.Printf("assets: %d files, %d bytes from %s/\n", len(assets), assetsTotalSize(assets), cfg.Assets)
 				for _, a := range assets {
@@ -157,12 +159,11 @@ func newUploadCmd() *cobra.Command {
 			return err
 		}
 
-		fmt.Printf("Uploading %s (%s, %d bytes) — %s\n", cfg.ScriptName, cfg.MainModule, len(src), reason)
-		info, err := client.UploadScript(ctx, cfg.AccountID, cfg.ScriptName, body, []Module{{
-			Name:        cfg.MainModule,
-			ContentType: "application/javascript+module",
-			Data:        src,
-		}})
+		fmt.Printf("Uploading %s (%d modules, %d bytes) — %s\n", cfg.ScriptName, len(modules), modulesSize(modules), reason)
+		for _, m := range modules[1:] {
+			fmt.Printf("  + %s (%d bytes)\n", m.Name, len(m.Data))
+		}
+		info, err := client.UploadScript(ctx, cfg.AccountID, cfg.ScriptName, body, modules)
 		if err != nil {
 			return annotateUploadError(err, cfg, state, targetTag)
 		}

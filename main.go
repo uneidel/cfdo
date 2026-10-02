@@ -36,6 +36,7 @@ Environment (each falls back to ~/.cfdo/settings.json, written by "cfdo init"):
 		newBackupCmd(),
 		newRestoreCmd(),
 		newDeleteCmd(),
+		newPluginCmd(),
 	)
 	return root
 }

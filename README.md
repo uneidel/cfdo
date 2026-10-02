@@ -32,6 +32,7 @@ cfdo backup               # every object's storage, to disk
 | `cfdo backup` | dump every object's storage to a directory |
 | `cfdo restore <dir>` | load a backup back into the objects |
 | `cfdo delete <script> \| --ns <ns>` | delete a worker and all its Durable Object data |
+| `cfdo plugin add\|update\|list` | vendor libraries such as iroh-wasm, with their skill |
 
 - **Backups that actually contain your data**, with checksums and a manifest, restorable
   in merge or point-in-time replace mode.
@@ -131,6 +132,7 @@ default export's routing. The rest is cfdo machinery.
 | `--compat-date` | worker compatibility date (default: today) |
 | `--account` | account id to write into `cfdo.json` |
 | `--no-skill` | do not write the Claude Code skill |
+| `--plugin <dir>` | vendor a plugin (repeatable), see [`cfdo plugin`](#cfdo-plugin-addupdatelist) |
 | `--custom-secret` | generate an admin secret for this script instead of using the shared one |
 | `--force` | overwrite existing files |
 
@@ -159,7 +161,10 @@ workers.dev.
 
 ### `cfdo upload`
 
-Uploads the module and works out the migration. Durable Object migrations are tag-based:
+Uploads the worker and works out the migration. Starting at `main_module`, it follows every
+relative import (`import`, `export … from`, `import()`) and uploads exactly the modules that
+are reached: `.js`/`.mjs` as ES modules, `.wasm` as compiled WebAssembly, `.txt`/`.html` as
+text, `.bin` as data. Files nothing imports are not sent. `--dry-run` lists them. Durable Object migrations are tag-based:
 the class list is only sent on the first upload, and later uploads send `old_tag → new_tag`.
 cfdo tracks what it has applied in `.cfdo/state.json`.
 
@@ -264,6 +269,34 @@ cfdo delete --ns <ns> --yes     # scripted
 
 This cannot be undone. Run `cfdo backup` first.
 
+### `cfdo plugin add|update|list`
+
+A plugin is a library for the worker, such as iroh-wasm, that ships a
+`cfdo-plugin.json` at its root:
+
+```json
+{ "name": "iroh-wasm", "version": "2026-10-02",
+  "worker": "dist/iroh-worker", "entry": "iroh.js", "skill": "SKILL.md" }
+```
+
+```sh
+cfdo create chat-room --plugin ~/src/iroh-wasm   # at scaffold time
+cfdo plugin add ~/src/iroh-wasm                  # or later, in a project
+cfdo plugin update [iroh-wasm]                   # re-copy from the recorded source
+cfdo plugin list
+```
+
+- The files in `worker` are copied to `plugins/<name>/`. The worker imports the entry
+  module, e.g. `import { IrohEndpoint } from "./plugins/iroh-wasm/iroh.js"`, and `upload`
+  ships it along with whatever it imports in turn.
+- The plugin's skill goes to `.claude/skills/<name>/SKILL.md`, with a note added on where
+  the plugin lives in this project.
+- `cfdo.json` records the source, version and a sha256 of what was copied. Uploads always
+  send the vendored copy, so a plugin that changes upstream changes nothing until you run
+  `plugin update`, which reports whether anything changed.
+- `plugins/<name>/` and the plugin's skill belong to cfdo and are replaced on update. Keep
+  your own code in `worker.mjs`.
+
 ## How objects are discovered
 
 This is the part that bites, and the reason backup does not simply trust the API.
@@ -325,6 +358,7 @@ the scaffold with `app()` and the routing replaced, so the admin routes still wo
 | `cfdo.json` | project config — commit it |
 | `worker.mjs` | your Durable Object class plus the admin routes |
 | `.claude/skills/<name>/SKILL.md` | project skill for Claude Code — commit it |
+| `plugins/<name>/` | vendored plugin files, with their skill in `.claude/skills/<name>/` — commit them |
 | `.cfdo/state.json` | applied migration tag, cached namespace id — **do not commit** |
 | `backups/` | backup output |
 
