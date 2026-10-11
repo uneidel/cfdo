@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 type fakeWorker struct {
 	mu      sync.Mutex
 	storage map[string]map[string]any // object id -> exported body
-	index   []indexEntry              // what the worker's index object knows
+	index   []IndexEntry              // what the worker's index object knows
 	secret  string
 }
 
@@ -131,7 +131,7 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 	ids := []string{"0a1b", "2c3d", "4e5f"}
 	worker := &fakeWorker{secret: "s3cret", storage: map[string]map[string]any{}}
 	for i, id := range ids {
-		worker.index = append(worker.index, indexEntry{Name: fmt.Sprintf("room-%d", i), ID: id})
+		worker.index = append(worker.index, IndexEntry{Name: fmt.Sprintf("room-%d", i), ID: id})
 		worker.storage[id] = map[string]any{
 			"format": 1.0, "class": "ChatRoom",
 			"kv": []any{[]any{"count", float64(i)}, []any{"name", fmt.Sprintf("room-%d", i)}},
@@ -316,7 +316,7 @@ func TestBackupDiscoversViaWorkerIndexWhenAPIListsNothing(t *testing.T) {
 	worker := &fakeWorker{secret: "s3cret", storage: map[string]map[string]any{
 		"aa": {"format": 1.0, "kv": []any{[]any{"k", "v"}}},
 		"bb": {"format": 1.0, "kv": []any{}},
-	}, index: []indexEntry{{Name: "alpha", ID: "aa"}, {Name: "beta", ID: "bb"}}}
+	}, index: []IndexEntry{{Name: "alpha", ID: "aa"}, {Name: "beta", ID: "bb"}}}
 	ws := httptest.NewServer(worker.handler())
 	defer ws.Close()
 	api := fakeAPI(t, nil) // API reports zero objects, as it does for SQLite
@@ -356,7 +356,7 @@ func TestBackupDiscoversViaWorkerIndexWhenAPIListsNothing(t *testing.T) {
 func TestBackupIdsFileMergesWithoutDuplicates(t *testing.T) {
 	worker := &fakeWorker{secret: "s3cret", storage: map[string]map[string]any{
 		"aa": {"format": 1.0}, "cc": {"format": 1.0},
-	}, index: []indexEntry{{Name: "alpha", ID: "aa"}}}
+	}, index: []IndexEntry{{Name: "alpha", ID: "aa"}}}
 	ws := httptest.NewServer(worker.handler())
 	defer ws.Close()
 	api := fakeAPI(t, nil)
@@ -767,7 +767,7 @@ func TestListSortsAndMarksUndeployed(t *testing.T) {
 
 	var got struct {
 		AccountID  string            `json:"account_id"`
-		Namespaces []namespaceReport `json:"namespaces"`
+		Namespaces []NamespaceReport `json:"namespaces"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("list -json did not emit valid JSON: %v\n%s", err, out)
@@ -815,7 +815,7 @@ func TestListScriptFilter(t *testing.T) {
 		}
 	})
 	var got struct {
-		Namespaces []namespaceReport `json:"namespaces"`
+		Namespaces []NamespaceReport `json:"namespaces"`
 	}
 	json.Unmarshal([]byte(out), &got)
 	if len(got.Namespaces) != 1 || got.Namespaces[0].Script != "zeta-app" {

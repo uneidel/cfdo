@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"context"
@@ -170,7 +170,10 @@ func newBackupCmd() *cobra.Command {
 
 				bytes.Add(int64(len(data)))
 				if n := done.Add(1); n%10 == 0 || int(n) == len(objects) {
-					fmt.Printf("\r  %d/%d objects, %s", n, len(objects), humanBytes(bytes.Load()))
+					emitProgress(int(n), 0, len(objects))
+					if progressSink == nil {
+						fmt.Printf("\r  %d/%d objects, %s", n, len(objects), humanBytes(bytes.Load()))
+					}
 				}
 			}(obj)
 		}

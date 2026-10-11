@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"context"
@@ -125,7 +125,7 @@ func TestStatusByScriptOrNamespace(t *testing.T) {
 		var got struct {
 			Script     string            `json:"script"`
 			Deployed   bool              `json:"deployed"`
-			Namespaces []remoteNamespace `json:"namespaces"`
+			Namespaces []RemoteNamespace `json:"namespaces"`
 		}
 		if err := json.Unmarshal([]byte(out), &got); err != nil {
 			t.Fatalf("%v: invalid JSON: %v\n%s", args, err, out)

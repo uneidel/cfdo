@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bytes"
@@ -104,7 +104,7 @@ func (a *adminClient) Ping(ctx context.Context) (*pingResult, error) {
 	return &p, nil
 }
 
-type indexEntry struct {
+type IndexEntry struct {
 	Name string `json:"name"`
 	ID   string `json:"id"`
 }
@@ -112,13 +112,13 @@ type indexEntry struct {
 // List asks the worker's index object which objects it has routed to. This is
 // the only discovery path that works for SQLite-backed namespaces, whose
 // objects the Cloudflare listing API does not return.
-func (a *adminClient) List(ctx context.Context) ([]indexEntry, error) {
+func (a *adminClient) List(ctx context.Context) ([]IndexEntry, error) {
 	raw, err := a.do(ctx, http.MethodGet, "list", nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	var out struct {
-		Objects []indexEntry `json:"objects"`
+		Objects []IndexEntry `json:"objects"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("unexpected list response: %s", shorten(string(raw), 120))

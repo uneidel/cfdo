@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"crypto/sha256"
@@ -152,7 +152,10 @@ func newRestoreCmd() *cobra.Command {
 				kvTotal.Add(int64(res.KV))
 				rowTotal.Add(int64(res.Rows))
 				if n := done.Add(1); n%10 == 0 || int(n) == len(targets) {
-					fmt.Printf("\r  %d/%d objects", n, len(targets))
+					emitProgress(int(n), 0, len(targets))
+					if progressSink == nil {
+						fmt.Printf("\r  %d/%d objects", n, len(targets))
+					}
 				}
 			}(o)
 		}
