@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bufio"
@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -148,24 +149,31 @@ func verifyToken(ctx context.Context, token, accountID string) error {
 }
 
 func showSettings(s *Settings, script string) error {
-	fmt.Printf("\n%s\n", s.path)
-	fmt.Printf("  %-22s %s\n", "cloudflare_api_token", mask(s.APIToken))
-	fmt.Printf("  %-22s %s\n", "cloudflare_account_id", orNotSet(s.AccountID))
-	fmt.Printf("  %-22s %s\n", "cfdo_secret", mask(s.Secret))
+	writeSettings(os.Stdout, s, script)
+	return nil
+}
+
+// writeSettings renders `cfdo init --show` to w. The CLI passes os.Stdout; the
+// desktop app's service captures it into a buffer. Credentials are masked here,
+// so the text is safe to show either way.
+func writeSettings(w io.Writer, s *Settings, script string) {
+	fmt.Fprintf(w, "\n%s\n", s.path)
+	fmt.Fprintf(w, "  %-22s %s\n", "cloudflare_api_token", mask(s.APIToken))
+	fmt.Fprintf(w, "  %-22s %s\n", "cloudflare_account_id", orNotSet(s.AccountID))
+	fmt.Fprintf(w, "  %-22s %s\n", "cfdo_secret", mask(s.Secret))
 	for name, entry := range s.Scripts {
-		fmt.Printf("  %-22s %s\n", "scripts."+name, mask(entry.Secret))
+		fmt.Fprintf(w, "  %-22s %s\n", "scripts."+name, mask(entry.Secret))
 	}
 
-	fmt.Println("\nResolved now (environment wins):")
+	fmt.Fprintln(w, "\nResolved now (environment wins):")
 	tok, tokErr := resolveAPIToken(s)
-	fmt.Printf("  %-22s %s %s\n", "API token", maskOrErr(tok, tokErr), sourceOf("CLOUDFLARE_API_TOKEN", s.APIToken != ""))
+	fmt.Fprintf(w, "  %-22s %s %s\n", "API token", maskOrErr(tok, tokErr), sourceOf("CLOUDFLARE_API_TOKEN", s.APIToken != ""))
 	acct := resolveAccountID(s, "")
-	fmt.Printf("  %-22s %s %s\n", "account id", orNotSet(acct), sourceOf("CLOUDFLARE_ACCOUNT_ID", s.AccountID != ""))
+	fmt.Fprintf(w, "  %-22s %s %s\n", "account id", orNotSet(acct), sourceOf("CLOUDFLARE_ACCOUNT_ID", s.AccountID != ""))
 	if script != "" {
 		sec, secErr := resolveSecret(s, script)
-		fmt.Printf("  %-22s %s %s\n", "secret for "+script, maskOrErr(sec, secErr), sourceOf("CFDO_SECRET", true))
+		fmt.Fprintf(w, "  %-22s %s %s\n", "secret for "+script, maskOrErr(sec, secErr), sourceOf("CFDO_SECRET", true))
 	}
-	return nil
 }
 
 func sourceOf(env string, inFile bool) string {

@@ -1,6 +1,7 @@
-package main
+package core
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -40,103 +41,14 @@ account from anywhere — without a cfdo.json there is no local migration state.
 			return remoteStatus(ctx, *account, script, *ns, *showObjects, *asJSON, *noPing)
 		}
 
-		cfg, err := loadConfig(*confPath)
+		ls, err := buildLocalStatus(ctx, *confPath, *showObjects, *noPing)
 		if err != nil {
 			return err
 		}
-		state, err := cfg.loadState()
-		if err != nil {
-			return err
-		}
-		token, err := cfg.token()
-		if err != nil {
-			return err
-		}
-		client := NewClient(token)
-
-		report := map[string]any{
-			"script":                cfg.ScriptName,
-			"class":                 cfg.ClassName,
-			"binding":               cfg.Binding,
-			"sqlite":                cfg.SQLite,
-			"local_migration_tag":   cfg.MigrationTag,
-			"applied_migration_tag": state.AppliedMigrationTag,
-			"last_uploaded_at":      state.LastUploadedAt,
-		}
-
-		script, err := client.GetScript(ctx, cfg.AccountID, cfg.ScriptName)
-		if err != nil {
-			return err
-		}
+		report, cfg, state := ls.report, ls.cfg, ls.state
+		script, ns, objects, indexed := ls.info, ls.ns, ls.objects, ls.indexed
 		deployed := script != nil
-		report["deployed"] = deployed
-		if deployed {
-			report["modified_on"] = script.ModifiedOn
-			if settings, err := client.GetScriptSettings(ctx, cfg.AccountID, cfg.ScriptName); err == nil {
-				report["compatibility_date"] = settings.CompatibilityDate
-				if settings.MigrationTag != "" {
-					report["remote_migration_tag"] = settings.MigrationTag
-				}
-				report["bindings"] = bindingNames(settings.Bindings)
-			}
-		}
 
-		var ns *Namespace
-		var objects []DOObject
-		if deployed {
-			ns, err = client.FindNamespace(ctx, cfg.AccountID, cfg.ScriptName, cfg.ClassName)
-			if err != nil {
-				report["namespace_error"] = err.Error()
-			} else {
-				report["namespace_id"] = ns.ID
-				report["namespace_sqlite"] = ns.UseSQLite
-				objects, err = client.ListObjects(ctx, cfg.AccountID, ns.ID)
-				if err != nil {
-					report["objects_error"] = err.Error()
-				} else {
-					report["object_count"] = len(objects)
-					report["objects_with_data"] = countWithData(objects)
-					if *showObjects {
-						ids := make([]string, 0, len(objects))
-						for _, o := range objects {
-							ids = append(ids, o.ID)
-						}
-						report["object_ids"] = ids
-					}
-				}
-				if state.NamespaceID != ns.ID {
-					state.NamespaceID = ns.ID
-					_ = cfg.saveState(state)
-				}
-			}
-		}
-
-		sub, _ := client.WorkersDevSubdomain(ctx, cfg.AccountID)
-		workerURL, urlErr := cfg.resolveWorkerURL(sub)
-		if urlErr == nil {
-			report["worker_url"] = workerURL
-		}
-
-		var indexed []indexEntry
-		if !*noPing && deployed && urlErr == nil {
-			if secret, err := cfg.secret(); err != nil {
-				report["admin"] = "skipped: no admin secret (run `cfdo init`)"
-			} else {
-				admin := newAdminClient(workerURL, secret)
-				if p, err := admin.Ping(ctx); err != nil {
-					report["admin"] = "unreachable: " + err.Error()
-				} else {
-					report["admin"] = fmt.Sprintf("ok (format %d)", p.Format)
-					if indexed, err = admin.List(ctx); err == nil {
-						report["indexed_objects"] = len(indexed)
-					}
-				}
-			}
-		}
-
-		if len(indexed) > 0 {
-			report["index"] = indexed
-		}
 		if *asJSON {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -201,6 +113,122 @@ account from anywhere — without a cfdo.json there is no local migration state.
 		return nil
 	}
 	return cmd
+}
+
+// localStatus is the gathered state for `cfdo status` on the local project. The
+// report map is what `--json` emits and what the desktop app consumes; the rest
+// are kept so the CLI can render its human table without re-fetching.
+type localStatus struct {
+	report  map[string]any
+	cfg     *Config
+	state   *State
+	info    *ScriptInfo
+	ns      *Namespace
+	objects []DOObject
+	indexed []IndexEntry
+}
+
+// buildLocalStatus inspects the project in the nearest cfdo.json (or confPath)
+// without printing anything, so both the CLI and the app can drive it.
+func buildLocalStatus(ctx context.Context, confPath string, showObjects, noPing bool) (*localStatus, error) {
+	cfg, err := loadConfig(confPath)
+	if err != nil {
+		return nil, err
+	}
+	state, err := cfg.loadState()
+	if err != nil {
+		return nil, err
+	}
+	token, err := cfg.token()
+	if err != nil {
+		return nil, err
+	}
+	client := NewClient(token)
+
+	report := map[string]any{
+		"script":                cfg.ScriptName,
+		"class":                 cfg.ClassName,
+		"binding":               cfg.Binding,
+		"sqlite":                cfg.SQLite,
+		"local_migration_tag":   cfg.MigrationTag,
+		"applied_migration_tag": state.AppliedMigrationTag,
+		"last_uploaded_at":      state.LastUploadedAt,
+	}
+
+	script, err := client.GetScript(ctx, cfg.AccountID, cfg.ScriptName)
+	if err != nil {
+		return nil, err
+	}
+	deployed := script != nil
+	report["deployed"] = deployed
+	if deployed {
+		report["modified_on"] = script.ModifiedOn
+		if settings, err := client.GetScriptSettings(ctx, cfg.AccountID, cfg.ScriptName); err == nil {
+			report["compatibility_date"] = settings.CompatibilityDate
+			if settings.MigrationTag != "" {
+				report["remote_migration_tag"] = settings.MigrationTag
+			}
+			report["bindings"] = bindingNames(settings.Bindings)
+		}
+	}
+
+	var ns *Namespace
+	var objects []DOObject
+	if deployed {
+		ns, err = client.FindNamespace(ctx, cfg.AccountID, cfg.ScriptName, cfg.ClassName)
+		if err != nil {
+			report["namespace_error"] = err.Error()
+		} else {
+			report["namespace_id"] = ns.ID
+			report["namespace_sqlite"] = ns.UseSQLite
+			objects, err = client.ListObjects(ctx, cfg.AccountID, ns.ID)
+			if err != nil {
+				report["objects_error"] = err.Error()
+			} else {
+				report["object_count"] = len(objects)
+				report["objects_with_data"] = countWithData(objects)
+				if showObjects {
+					ids := make([]string, 0, len(objects))
+					for _, o := range objects {
+						ids = append(ids, o.ID)
+					}
+					report["object_ids"] = ids
+				}
+			}
+			if state.NamespaceID != ns.ID {
+				state.NamespaceID = ns.ID
+				_ = cfg.saveState(state)
+			}
+		}
+	}
+
+	sub, _ := client.WorkersDevSubdomain(ctx, cfg.AccountID)
+	workerURL, urlErr := cfg.resolveWorkerURL(sub)
+	if urlErr == nil {
+		report["worker_url"] = workerURL
+	}
+
+	var indexed []IndexEntry
+	if !noPing && deployed && urlErr == nil {
+		if secret, err := cfg.secret(); err != nil {
+			report["admin"] = "skipped: no admin secret (run `cfdo init`)"
+		} else {
+			admin := newAdminClient(workerURL, secret)
+			if p, err := admin.Ping(ctx); err != nil {
+				report["admin"] = "unreachable: " + err.Error()
+			} else {
+				report["admin"] = fmt.Sprintf("ok (format %d)", p.Format)
+				if indexed, err = admin.List(ctx); err == nil {
+					report["indexed_objects"] = len(indexed)
+				}
+			}
+		}
+	}
+	if len(indexed) > 0 {
+		report["index"] = indexed
+	}
+
+	return &localStatus{report: report, cfg: cfg, state: state, info: script, ns: ns, objects: objects, indexed: indexed}, nil
 }
 
 func migrationLine(cfg *Config, state *State, report map[string]any) string {

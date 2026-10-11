@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"context"
@@ -12,8 +12,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// namespaceReport is one row of `cfdo list`.
-type namespaceReport struct {
+// NamespaceReport is one row of `cfdo list`, and the shape the desktop app's
+// service layer returns for the namespace overview.
+type NamespaceReport struct {
 	Script       string   `json:"script"`
 	Class        string   `json:"class"`
 	NamespaceID  string   `json:"namespace_id"`
@@ -44,85 +45,14 @@ works from anywhere — use it to see what exists before picking a project.`,
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		settings, err := loadSettings()
+		accountID, rows, scriptsErr, err := collectNamespaces(ctx, *account, *scriptFilter, *showObjects, *deep)
 		if err != nil {
 			return err
 		}
-		accountID := strings.TrimSpace(*account)
-		if accountID == "" {
-			accountID = resolveAccountID(settings, "")
-		}
-		if accountID == "" {
-			return fmt.Errorf("no account id — pass --account, set CLOUDFLARE_ACCOUNT_ID, or run `cfdo init`")
-		}
-		token, err := resolveAPIToken(settings)
-		if err != nil {
-			return err
-		}
-		client := NewClient(token)
-
-		namespaces, err := client.ListNamespaces(ctx, accountID)
-		if err != nil {
-			return fmt.Errorf("listing namespaces: %w", err)
-		}
-		scripts, err := client.ListScripts(ctx, accountID)
-		if err != nil {
+		if scriptsErr != nil {
 			// A token without script read access can still list namespaces.
-			fmt.Fprintf(os.Stderr, "warning: could not list scripts: %v\n", err)
+			fmt.Fprintf(os.Stderr, "warning: could not list scripts: %v\n", scriptsErr)
 		}
-		deployed := map[string]ScriptInfo{}
-		for _, s := range scripts {
-			deployed[s.ID] = s
-		}
-
-		var subdomain string
-		if *deep {
-			subdomain, _ = client.WorkersDevSubdomain(ctx, accountID)
-		}
-
-		rows := make([]namespaceReport, 0, len(namespaces))
-		for _, ns := range namespaces {
-			if *scriptFilter != "" && ns.Script != *scriptFilter {
-				continue
-			}
-			row := namespaceReport{
-				Script: ns.Script, Class: ns.Class,
-				NamespaceID: ns.ID, SQLite: ns.UseSQLite,
-			}
-			if info, ok := deployed[ns.Script]; ok {
-				row.Deployed = true
-				row.ModifiedOn = info.ModifiedOn
-			}
-
-			objects, err := client.ListObjects(ctx, accountID, ns.ID)
-			if err != nil {
-				row.APIError = err.Error()
-			} else {
-				row.APIObjects = len(objects)
-				if *showObjects {
-					for _, o := range objects {
-						row.ObjectIDs = append(row.ObjectIDs, o.ID)
-					}
-				}
-			}
-
-			if *deep {
-				n, err := indexCount(ctx, settings, ns.Script, subdomain, &row)
-				if err != nil {
-					row.IndexError = err.Error()
-				} else {
-					row.IndexObjects = &n
-				}
-			}
-			rows = append(rows, row)
-		}
-
-		slices.SortFunc(rows, func(a, b namespaceReport) int {
-			if c := strings.Compare(a.Script, b.Script); c != 0 {
-				return c
-			}
-			return strings.Compare(a.Class, b.Class)
-		})
 
 		if *asJSON {
 			enc := json.NewEncoder(os.Stdout)
@@ -207,10 +137,93 @@ works from anywhere — use it to see what exists before picking a project.`,
 	return cmd
 }
 
+// collectNamespaces gathers the namespace overview shared by `cfdo list` and
+// the desktop app. It never prints: a failure to list scripts (which only costs
+// deploy status) is returned as scriptsErr so the CLI can warn while the app can
+// ignore it. A hard failure (no account, bad token, listing error) is err.
+func collectNamespaces(ctx context.Context, account, scriptFilter string, showObjects, deep bool) (accountID string, rows []NamespaceReport, scriptsErr, err error) {
+	settings, err := loadSettings()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	accountID = strings.TrimSpace(account)
+	if accountID == "" {
+		accountID = resolveAccountID(settings, "")
+	}
+	if accountID == "" {
+		return "", nil, nil, fmt.Errorf("no account id — pass --account, set CLOUDFLARE_ACCOUNT_ID, or run `cfdo init`")
+	}
+	token, err := resolveAPIToken(settings)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	client := NewClient(token)
+
+	namespaces, err := client.ListNamespaces(ctx, accountID)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("listing namespaces: %w", err)
+	}
+	scripts, scriptsErr := client.ListScripts(ctx, accountID)
+	deployed := map[string]ScriptInfo{}
+	for _, s := range scripts {
+		deployed[s.ID] = s
+	}
+
+	var subdomain string
+	if deep {
+		subdomain, _ = client.WorkersDevSubdomain(ctx, accountID)
+	}
+
+	rows = make([]NamespaceReport, 0, len(namespaces))
+	for _, ns := range namespaces {
+		if scriptFilter != "" && ns.Script != scriptFilter {
+			continue
+		}
+		row := NamespaceReport{
+			Script: ns.Script, Class: ns.Class,
+			NamespaceID: ns.ID, SQLite: ns.UseSQLite,
+		}
+		if info, ok := deployed[ns.Script]; ok {
+			row.Deployed = true
+			row.ModifiedOn = info.ModifiedOn
+		}
+
+		objects, err := client.ListObjects(ctx, accountID, ns.ID)
+		if err != nil {
+			row.APIError = err.Error()
+		} else {
+			row.APIObjects = len(objects)
+			if showObjects {
+				for _, o := range objects {
+					row.ObjectIDs = append(row.ObjectIDs, o.ID)
+				}
+			}
+		}
+
+		if deep {
+			n, err := indexCount(ctx, settings, ns.Script, subdomain, &row)
+			if err != nil {
+				row.IndexError = err.Error()
+			} else {
+				row.IndexObjects = &n
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	slices.SortFunc(rows, func(a, b NamespaceReport) int {
+		if c := strings.Compare(a.Script, b.Script); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Class, b.Class)
+	})
+	return accountID, rows, scriptsErr, nil
+}
+
 // indexCount asks the worker's own index how many objects it knows about. It
 // needs the script's admin secret and a reachable workers.dev hostname, so it
 // is best-effort and only runs under --deep.
-func indexCount(ctx context.Context, settings *Settings, script, subdomain string, row *namespaceReport) (int, error) {
+func indexCount(ctx context.Context, settings *Settings, script, subdomain string, row *NamespaceReport) (int, error) {
 	secret, err := resolveSecret(settings, script)
 	if err != nil {
 		return 0, fmt.Errorf("no secret recorded for %s", script)
