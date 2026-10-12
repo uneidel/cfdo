@@ -31,6 +31,22 @@ func TestNewCommandShape(t *testing.T) {
 	}
 }
 
+// TestNewCommandMetadata pins the user-facing command metadata: a help line and a
+// long description that steers the user toward the GUI build, and SilenceUsage so a
+// runtime failure (e.g. the no-GUI build error) is not buried under a usage dump.
+func TestNewCommandMetadata(t *testing.T) {
+	cmd := NewCommand(&fakeService{})
+	if cmd.Short == "" {
+		t.Error("Short help is empty")
+	}
+	if !strings.Contains(cmd.Long, "withgui") {
+		t.Errorf("Long should mention the withgui build requirement, got %q", cmd.Long)
+	}
+	if !cmd.SilenceUsage {
+		t.Error("SilenceUsage should be set so a RunE error isn't drowned in usage output")
+	}
+}
+
 // In the default (!withgui) build, executing the command must reach Run and come
 // back with the explicit rebuild instruction — proving RunE→Run is wired, not just
 // that it compiles. Under -tags withgui the same path opens the Fyne window instead.
