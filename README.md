@@ -15,7 +15,7 @@ cfdo backup               # every object's storage, to disk
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Commands](#commands)
-- [Desktop app (`cfdo ui`)](#desktop-app-cfdo-ui)
+- [Desktop dashboard](#desktop-dashboard)
 - [How objects are discovered](#how-objects-are-discovered)
 - [Storage fidelity](#storage-fidelity)
 - [First deploy on a fresh account](#first-deploy-on-a-fresh-account)
@@ -298,30 +298,27 @@ cfdo plugin list
 - `plugins/<name>/` and the plugin's skill belong to cfdo and are replaced on update. Keep
   your own code in `worker.mjs`.
 
-## Desktop app (`cfdo ui`)
+## Desktop dashboard
 
-`cfdo ui` opens a native desktop window that drives the same operations as the CLI through the shared in-process `core.Service`. It is a render-only client: no daemon, no HTTP server, no localhost port, nothing on the network — the window calls the core operations directly in-process. Credentials resolve exactly as for the CLI (same environment, same `~/.cfdo/settings.json`) and are masked before any output reaches the window. The dashboard's data layer — namespaces with object counts, per-script status, and the backup/restore log stream — is implemented as tested, pure-Go view-models over `core.Service`; the Fyne widgets that render them are being brought up incrementally behind the build tag.
+`cfdo ui` opens a native desktop view over the same operations the CLI runs: a namespaces list with object counts, per-script status cards, and backup and restore with a live job log and progress meter. It is **render-only** — the window reads already-parsed, already-masked results through the same core seam the CLI uses, and opens no port, browser, or socket of its own. Destructive actions keep the CLI's confirmation: a delete still wants the script name typed, a `--mode replace` restore still wants explicit confirmation.
 
-The GUI is **opt-in at build time.** A plain `go build` yields the pure-Go, CGO-free CLI documented above — no Fyne, no OpenGL, no cgo, and no `ui` subcommand. The window and its `ui` command compile only under the `withgui` tag:
+The GUI is an **opt-in build**. The default `cfdo` binary links no graphics stack and carries no cgo dependency, and does not include the `ui` command — on it, `cfdo ui` reports an unknown command. Build the GUI explicitly to get the command and window:
 
 ```sh
-go build -tags withgui -o cfdo .   # GUI build: adds the `cfdo ui` command + window
-cfdo ui                            # open the dashboard
+CGO_ENABLED=1 go build -tags withgui -o cfdo .
+cfdo ui
 ```
 
-Without the tag there is no `ui` command (`cfdo ui` reports an unknown command); the default `CGO_ENABLED=0 go build ./...` stays green on hosts with no display toolchain.
-
-### Build prerequisites for `-tags withgui`
-
-Go 1.26+, a C compiler, and the OpenGL + windowing development headers — Fyne links a cgo/GL renderer. On a Debian/Ubuntu base:
+It needs a C compiler and the system GL and windowing headers. On Debian/Ubuntu:
 
 ```sh
-sudo apt-get install -y \
-  gcc pkg-config libgl1-mesa-dev xorg-dev \
+sudo apt-get install gcc pkg-config libgl1-mesa-dev xorg-dev \
   libwayland-dev libxkbcommon-dev wayland-protocols libwayland-bin
 ```
 
-The X11 packages (`xorg-dev` and friends) are not sufficient on their own: Fyne's GLFW 3.4 compiles both its X11 and Wayland backends on Linux, so the link also needs the Wayland and xkbcommon headers (`libwayland-dev libxkbcommon-dev wayland-protocols libwayland-bin`) — without them the build fails with `fatal error: wayland-client-core.h: No such file or directory`.
+Install both the X11 (`xorg-dev`) and Wayland packages: the GLFW 3.4 backend compiles support for both display servers into one build, so leaving either set out fails the link.
+
+The dashboard is landing incrementally. The current `withgui` build stands the window up over the finished, tested view-models while the individual panels (namespaces table, status cards, backup/restore log) are being wired in; the command, the opt-in build and the toolchain above are stable.
 
 ## How objects are discovered
 
