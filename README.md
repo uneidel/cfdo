@@ -15,6 +15,7 @@ cfdo backup               # every object's storage, to disk
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Commands](#commands)
+- [Desktop dashboard](#desktop-dashboard)
 - [How objects are discovered](#how-objects-are-discovered)
 - [Storage fidelity](#storage-fidelity)
 - [First deploy on a fresh account](#first-deploy-on-a-fresh-account)
@@ -296,6 +297,28 @@ cfdo plugin list
   `plugin update`, which reports whether anything changed.
 - `plugins/<name>/` and the plugin's skill belong to cfdo and are replaced on update. Keep
   your own code in `worker.mjs`.
+
+## Desktop dashboard
+
+`cfdo ui` opens a native desktop view over the same operations the CLI runs: a namespaces list with object counts, per-script status cards, and backup and restore with a live job log and progress meter. It is **render-only** — the window reads already-parsed, already-masked results through the same core seam the CLI uses, and opens no port, browser, or socket of its own. Destructive actions keep the CLI's confirmation: a delete still wants the script name typed, a `--mode replace` restore still wants explicit confirmation.
+
+The GUI is an **opt-in build**. The default `cfdo` binary links no graphics stack and carries no cgo dependency, and does not include the `ui` command — on it, `cfdo ui` reports an unknown command. Build the GUI explicitly to get the command and window:
+
+```sh
+CGO_ENABLED=1 go build -tags withgui -o cfdo .
+cfdo ui
+```
+
+It needs a C compiler and the system GL and windowing headers. On Debian/Ubuntu:
+
+```sh
+sudo apt-get install gcc pkg-config libgl1-mesa-dev xorg-dev \
+  libwayland-dev libxkbcommon-dev wayland-protocols libwayland-bin
+```
+
+Install both the X11 (`xorg-dev`) and Wayland packages: the GLFW 3.4 backend compiles support for both display servers into one build, so leaving either set out fails the link.
+
+The dashboard is landing incrementally. The current `withgui` build stands the window up over the finished, tested view-models while the individual panels (namespaces table, status cards, backup/restore log) are being wired in; the command, the opt-in build and the toolchain above are stable.
 
 ## How objects are discovered
 
