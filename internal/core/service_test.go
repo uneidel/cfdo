@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,54 @@ func TestServiceRestoreValidation(t *testing.T) {
 	}
 	if _, err := svc.Restore(context.Background(), RestoreRequest{Dir: "x", Mode: "bogus", Confirm: true}); err == nil {
 		t.Fatal("expected error for invalid mode")
+	}
+}
+
+// TestSecretMaskerSeededFromResolvedCredentials proves the hardening in ui-7: a
+// secret that lives ONLY in ~/.cfdo/settings.json (never exported to the
+// environment) is still scrubbed from streamed output. Before the fix the
+// masker seeded from env alone, so a settings-only or --custom-secret value
+// would leak verbatim into the job console. (The display mask() has its own
+// TestMaskNeverRevealsFullCredential in e2e_test.go; this covers the stream.)
+func TestSecretMaskerSeededFromResolvedCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CFDO_HOME", home)
+	// Nothing in the environment: resolution must fall back to settings.json.
+	t.Setenv("CFDO_SECRET", "")
+	t.Setenv("CLOUDFLARE_API_TOKEN", "")
+
+	const (
+		globalSecret = "global-secret-aaaaaa"
+		scriptSecret = "custom-secret-bbbbbb"
+		apiToken     = "api-token-cccccccccc"
+	)
+	settings := `{
+		"cloudflare_api_token": "` + apiToken + `",
+		"cfdo_secret": "` + globalSecret + `",
+		"scripts": {"app": {"cfdo_secret": "` + scriptSecret + `"}}
+	}`
+	dir := filepath.Join(home, ".cfdo")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, ok := NewService().(*service)
+	if !ok {
+		t.Fatal("NewService did not return *service")
+	}
+
+	for _, secret := range []string{globalSecret, scriptSecret, apiToken} {
+		line := "error: request to https://api/?token=" + secret + " failed"
+		got := svc.mask.line(line)
+		if strings.Contains(got, secret) {
+			t.Errorf("credential leaked: masking %q left the secret in %q", secret, got)
+		}
+		if !strings.Contains(got, "***") {
+			t.Errorf("expected a redaction marker in %q", got)
+		}
 	}
 }
 

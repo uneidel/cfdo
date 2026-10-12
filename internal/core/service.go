@@ -51,7 +51,39 @@ type service struct {
 
 // NewService builds a Service. The returned value is cheap; make one per app.
 func NewService() Service {
-	return &service{mask: newSecretMasker(os.Getenv("CFDO_SECRET"), os.Getenv("CLOUDFLARE_API_TOKEN"))}
+	return &service{mask: newSecretMasker(resolvedCredentials()...)}
+}
+
+// resolvedCredentials gathers every credential value the masker should scrub
+// from streamed output. It seeds from the RESOLVED creds (the same values the
+// commands actually use), not the environment alone: a secret recorded only in
+// ~/.cfdo/settings.json — never exported as CFDO_SECRET — must still be masked
+// if it surfaces in a line. We collect the global API token and secret plus
+// each known script's resolved secret, then add the raw env values as a belt-
+// and-braces fallback. Loading settings is best-effort: a missing or malformed
+// file is not fatal here, it just means we mask whatever the environment gives.
+func resolvedCredentials() []string {
+	// Env values first, so masking still works even if settings fail to load.
+	vals := []string{os.Getenv("CFDO_SECRET"), os.Getenv("CLOUDFLARE_API_TOKEN")}
+
+	settings, err := loadSettings()
+	if err != nil {
+		return vals // best-effort: env-only masking
+	}
+	if tok, err := resolveAPIToken(settings); err == nil {
+		vals = append(vals, tok)
+	}
+	// The global secret (empty script resolves to env or the shared secret).
+	if sec, err := resolveSecret(settings, ""); err == nil {
+		vals = append(vals, sec)
+	}
+	// Each script may carry its own --custom-secret.
+	for script := range settings.Scripts {
+		if sec, err := resolveSecret(settings, script); err == nil {
+			vals = append(vals, sec)
+		}
+	}
+	return vals
 }
 
 // ---- reads -------------------------------------------------------------
