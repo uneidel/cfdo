@@ -300,16 +300,16 @@ cfdo plugin list
 
 ## Desktop app (`cfdo ui`)
 
-`cfdo ui` opens a native desktop dashboard over the same operations the CLI runs: the namespaces list with live object counts, per-script status cards, and the backups list with restore and streaming logs. It is a render-only view — every read and action goes through the same in-process `core.Service` the CLI uses. There is no daemon, no HTTP server, no localhost port, and nothing exposed on the network: the window calls the operations directly in the same process. Credentials resolve exactly as they do for the CLI (same environment, same `~/.cfdo/settings.json`) and are masked before any output reaches the window.
+`cfdo ui` opens a native desktop window that drives the same operations as the CLI through the shared in-process `core.Service`. It is a render-only client: no daemon, no HTTP server, no localhost port, nothing on the network — the window calls the core operations directly in-process. Credentials resolve exactly as for the CLI (same environment, same `~/.cfdo/settings.json`) and are masked before any output reaches the window. The dashboard's data layer — namespaces with object counts, per-script status, and the backup/restore log stream — is implemented as tested, pure-Go view-models over `core.Service`; the Fyne widgets that render them are being brought up incrementally behind the build tag.
 
-The GUI is **opt-in at build time.** The default `cfdo` you get from a plain `go build` is the pure-Go, CGO-free CLI documented above — it links no Fyne, no OpenGL, and no cgo, so it builds and runs on any host with just a Go toolchain. The desktop window is compiled only behind the `withgui` build tag:
+The GUI is **opt-in at build time.** A plain `go build` yields the pure-Go, CGO-free CLI documented above — no Fyne, no OpenGL, no cgo, and no `ui` subcommand. The window and its `ui` command compile only under the `withgui` tag:
 
 ```sh
-go build -tags withgui -o cfdo .   # GUI build (the default build omits the window)
+go build -tags withgui -o cfdo .   # GUI build: adds the `cfdo ui` command + window
 cfdo ui                            # open the dashboard
 ```
 
-Without `-tags withgui`, `cfdo ui` prints a one-line "rebuild with `-tags withgui`" message instead of a window, so the command always exists but the renderer ships only when you ask for it.
+Without the tag there is no `ui` command (`cfdo ui` reports an unknown command); the default `CGO_ENABLED=0 go build ./...` stays green on hosts with no display toolchain.
 
 ### Build prerequisites for `-tags withgui`
 
@@ -322,8 +322,6 @@ sudo apt-get install -y \
 ```
 
 The X11 packages (`xorg-dev` and friends) are not sufficient on their own: Fyne's GLFW 3.4 compiles both its X11 and Wayland backends on Linux, so the link also needs the Wayland and xkbcommon headers (`libwayland-dev libxkbcommon-dev wayland-protocols libwayland-bin`) — without them the build fails with `fatal error: wayland-client-core.h: No such file or directory`.
-
-The default CLI build needs none of this: `CGO_ENABLED=0 go build ./...` stays green on a host with no display toolchain, and the shipped non-GUI binary does not link the window at all.
 
 ## How objects are discovered
 
