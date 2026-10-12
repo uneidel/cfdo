@@ -15,6 +15,7 @@ cfdo backup               # every object's storage, to disk
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Commands](#commands)
+- [Desktop app (`cfdo ui`)](#desktop-app-cfdo-ui)
 - [How objects are discovered](#how-objects-are-discovered)
 - [Storage fidelity](#storage-fidelity)
 - [First deploy on a fresh account](#first-deploy-on-a-fresh-account)
@@ -296,6 +297,33 @@ cfdo plugin list
   `plugin update`, which reports whether anything changed.
 - `plugins/<name>/` and the plugin's skill belong to cfdo and are replaced on update. Keep
   your own code in `worker.mjs`.
+
+## Desktop app (`cfdo ui`)
+
+`cfdo ui` opens a native desktop dashboard over the same operations the CLI runs: the namespaces list with live object counts, per-script status cards, and the backups list with restore and streaming logs. It is a render-only view — every read and action goes through the same in-process `core.Service` the CLI uses. There is no daemon, no HTTP server, no localhost port, and nothing exposed on the network: the window calls the operations directly in the same process. Credentials resolve exactly as they do for the CLI (same environment, same `~/.cfdo/settings.json`) and are masked before any output reaches the window.
+
+The GUI is **opt-in at build time.** The default `cfdo` you get from a plain `go build` is the pure-Go, CGO-free CLI documented above — it links no Fyne, no OpenGL, and no cgo, so it builds and runs on any host with just a Go toolchain. The desktop window is compiled only behind the `withgui` build tag:
+
+```sh
+go build -tags withgui -o cfdo .   # GUI build (the default build omits the window)
+cfdo ui                            # open the dashboard
+```
+
+Without `-tags withgui`, `cfdo ui` prints a one-line "rebuild with `-tags withgui`" message instead of a window, so the command always exists but the renderer ships only when you ask for it.
+
+### Build prerequisites for `-tags withgui`
+
+Go 1.26+, a C compiler, and the OpenGL + windowing development headers — Fyne links a cgo/GL renderer. On a Debian/Ubuntu base:
+
+```sh
+sudo apt-get install -y \
+  gcc pkg-config libgl1-mesa-dev xorg-dev \
+  libwayland-dev libxkbcommon-dev wayland-protocols libwayland-bin
+```
+
+The X11 packages (`xorg-dev` and friends) are not sufficient on their own: Fyne's GLFW 3.4 compiles both its X11 and Wayland backends on Linux, so the link also needs the Wayland and xkbcommon headers (`libwayland-dev libxkbcommon-dev wayland-protocols libwayland-bin`) — without them the build fails with `fatal error: wayland-client-core.h: No such file or directory`.
+
+The default CLI build needs none of this: `CGO_ENABLED=0 go build ./...` stays green on a host with no display toolchain, and the shipped non-GUI binary does not link the window at all.
 
 ## How objects are discovered
 
