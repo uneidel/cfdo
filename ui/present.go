@@ -41,6 +41,29 @@ const (
 	StateMuted CellState = "muted" // no data yet / needs Deep → tertiary
 )
 
+// pillLabel maps a console state to the result-badge text and color. It is the single
+// place the cancel case is reconciled for the view: the reducer keeps the raw terminal
+// error (so the cancel→terminal-error contract in console.go stays intact), while a
+// deliberate user cancel is shown as amber "cancelled" rather than a red failure.
+// Success and non-cancelled failures pass through unchanged. Pure (no Fyne) so it is
+// unit-tested headlessly alongside the reducer.
+func pillLabel(st ConsoleState) (string, CellState) {
+	switch st.Pill {
+	case PillSuccess:
+		return st.PillText, StateOK
+	case PillError:
+		if st.Cancelled {
+			return "cancelled", StateWarn
+		}
+		return st.PillText, StateError
+	default: // PillRunning
+		if st.Cancelled {
+			return "cancelling…", StateWarn
+		}
+		return st.PillText, StateWarn
+	}
+}
+
 // idTrim is how many leading chars of an id we show before the ellipsis in dense cells.
 const idTrim = 8
 

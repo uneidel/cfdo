@@ -300,7 +300,7 @@ cfdo plugin list
 
 ## Desktop dashboard
 
-`cfdo ui` opens a native desktop view over the same operations the CLI runs: a namespaces list with object counts, per-script status cards, and backup and restore with a live job log and progress meter. It is **render-only** — the window reads already-parsed, already-masked results through the same core seam the CLI uses, and opens no port, browser, or socket of its own. Destructive actions keep the CLI's confirmation: a delete still wants the script name typed, a `--mode replace` restore still wants explicit confirmation.
+`cfdo ui` opens a native desktop view over the same operations the CLI runs: a namespaces list with object counts, per-script status cards, and backup and restore with a live job log and progress meter. It is **render-only** — the window reads already-parsed, already-masked results through the same core seam the CLI uses, and opens no port, browser, or socket of its own. Destructive actions keep the CLI's confirmation: a restore still wants explicit confirmation before it writes objects back to the live namespace. (The dashboard exposes backup and restore only — not `delete`.)
 
 The GUI is an **opt-in build**. The default `cfdo` binary links no graphics stack and carries no cgo dependency, and does not include the `ui` command — on it, `cfdo ui` reports an unknown command. Build the GUI explicitly to get the command and window:
 
@@ -318,7 +318,7 @@ sudo apt-get install gcc pkg-config libgl1-mesa-dev xorg-dev \
 
 Install both the X11 (`xorg-dev`) and Wayland packages: the GLFW 3.4 backend compiles support for both display servers into one build, so leaving either set out fails the link.
 
-The dashboard is landing incrementally. The current `withgui` build stands the window up over the finished, tested view-models while the individual panels (namespaces table, status cards, backup/restore log) are being wired in; the command, the opt-in build and the toolchain above are stable.
+The `withgui` build renders the full dashboard over the finished, tested view-models: a namespaces table with object counts, per-script status cards, and backup/restore driven through a shared job pane with a streaming log, a progress meter, and a cancellable run. The command, the opt-in build and the toolchain above are stable.
 
 ## How objects are discovered
 
