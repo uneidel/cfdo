@@ -119,6 +119,32 @@ func TestConsole_CancelThenTerminalError(t *testing.T) {
 	if !strings.Contains(st.PillText, "context canceled") {
 		t.Errorf("pill text = %q, want it to carry the context-cancel cause", st.PillText)
 	}
+	// The reducer keeps the raw error (asserted above); the VIEW reconciles a deliberate
+	// cancel to an amber "cancelled" rather than a red failure.
+	if text, state := pillLabel(st); text != "cancelled" || state != StateWarn {
+		t.Errorf("cancelled view = (%q,%s), want (\"cancelled\",%s)", text, state, StateWarn)
+	}
+}
+
+func TestPillLabel(t *testing.T) {
+	cases := []struct {
+		name  string
+		st    ConsoleState
+		text  string
+		state CellState
+	}{
+		{"running", ConsoleState{Pill: PillRunning, PillText: "running…", Active: true}, "running…", StateWarn},
+		{"success", ConsoleState{Pill: PillSuccess, PillText: "done"}, "done", StateOK},
+		{"failure", ConsoleState{Pill: PillError, PillText: "failed: boom"}, "failed: boom", StateError},
+		{"cancelling", ConsoleState{Pill: PillRunning, PillText: "running…", Active: true, Cancelled: true}, "cancelling…", StateWarn},
+		{"cancelled", ConsoleState{Pill: PillError, PillText: "failed: context canceled", Cancelled: true}, "cancelled", StateWarn},
+	}
+	for _, c := range cases {
+		text, state := pillLabel(c.st)
+		if text != c.text || state != c.state {
+			t.Errorf("%s: pillLabel = (%q,%s), want (%q,%s)", c.name, text, state, c.text, c.state)
+		}
+	}
 }
 
 func TestConsole_TerminalPill(t *testing.T) {

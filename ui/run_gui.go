@@ -82,7 +82,11 @@ type dashboard struct {
 	bkSel   int // selected row index, -1 = none
 
 	// Shared job console (one job at a time; core serializes under a mutex).
+	// jobPending guards the window between a click launching startJob and the
+	// console going Active inside the deferred fyne.Do, so a rapid second click
+	// cannot slip a second job past jobActive().
 	console    *Console
+	jobPending bool
 	runningJob *core.Job
 	logBox     *fyne.Container
 	logScroll  *container.Scroll
@@ -372,7 +376,11 @@ func (d *dashboard) buildLogPane() fyne.CanvasObject {
 // startJob begins a streaming action and folds its Events through the Console
 // reducer, mirroring each state change into the log pane on the UI thread.
 func (d *dashboard) startJob(start func() (*core.Job, error)) {
+	// Set synchronously on the UI thread, before launching the goroutine, so a
+	// second click arriving before the console goes Active is still refused.
+	d.jobPending = true
 	go func() {
+		defer fyne.Do(func() { d.jobPending = false })
 		job, err := start()
 		fyne.Do(func() {
 			if err != nil {
@@ -430,22 +438,17 @@ func (d *dashboard) resetConsole() {
 }
 
 // jobActive reports whether a job is currently running (so a second one is refused).
-func (d *dashboard) jobActive() bool { return d.console != nil && d.console.State().Active }
+// It ORs the synchronous jobPending flag with the console's Active state to close the
+// gap between a click and the console being created inside the deferred fyne.Do.
+func (d *dashboard) jobActive() bool {
+	return d.jobPending || (d.console != nil && d.console.State().Active)
+}
 
 // renderMeterPill reflects the console's meter and terminal pill into the widgets.
 func (d *dashboard) renderMeterPill(st ConsoleState) {
-	switch st.Pill {
-	case PillSuccess:
-		d.pill.Color = cellColor(StateOK)
-	case PillError:
-		d.pill.Color = cellColor(StateError)
-	default:
-		d.pill.Color = cellColor(StateWarn)
-	}
-	d.pill.Text = st.PillText
-	if st.Cancelled && st.Pill == PillRunning {
-		d.pill.Text = "cancelling…"
-	}
+	text, state := pillLabel(st)
+	d.pill.Text = text
+	d.pill.Color = cellColor(state)
 	d.pill.Refresh()
 
 	m := st.Meter
