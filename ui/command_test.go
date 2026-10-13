@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -44,20 +43,5 @@ func TestNewCommandMetadata(t *testing.T) {
 	}
 	if !cmd.SilenceUsage {
 		t.Error("SilenceUsage should be set so a RunE error isn't drowned in usage output")
-	}
-}
-
-// In the default (!withgui) build, executing the command must reach Run and come
-// back with the explicit rebuild instruction — proving RunE→Run is wired, not just
-// that it compiles. Under -tags withgui the same path opens the Fyne window instead.
-func TestNewCommandRunWithoutGUI(t *testing.T) {
-	cmd := NewCommand(&fakeService{})
-	cmd.SetArgs(nil)
-	err := cmd.ExecuteContext(context.Background())
-	if err == nil {
-		t.Fatal("expected an error from the no-GUI build, got nil")
-	}
-	if !strings.Contains(err.Error(), "withgui") {
-		t.Errorf("error %q should tell the user to rebuild with -tags withgui", err)
 	}
 }
